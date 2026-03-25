@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>vMix Commander</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top Header Bar -->
+  <div id="top-header" class="top-header">
+    <div class="app-title">vMix Commander</div>
+    <div id="identity-badge" class="identity-badge"></div>
+  </div>
+
+  <!-- Main Content Area -->
+  <div id="app">
+    <!-- Rooms Page -->
+    <div id="page-rooms" class="page active">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Room Control</div>
+          <div class="page-subtitle">vMix · Record + Stream + MultiCorder</div>
+        </div>
+        <div id="profile-name" class="profile-badge"></div>
+      </div>
+      <div id="rooms-container" class="rooms-grid"></div>
+    </div>
+
+    <!-- Events Page -->
+    <div id="page-events" class="page">
+      <div class="page-header">
+        <div class="page-title">Event Profiles</div>
+      </div>
+      <div class="profiles-container">
+        <div id="profiles-list"></div>
+        <div class="profiles-actions">
+          <button id="btn-new-profile" class="btn-new">+ New Profile</button>
+          <button id="btn-export-profiles" class="btn-secondary">Export Profiles</button>
+          <button id="btn-import-profiles" class="btn-secondary">Import Profiles</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Show Page (Run-of-Show Timeline) -->
+    <div id="page-show" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Run of Show</div>
+          <div class="page-subtitle">Timeline · Auto-trigger · Manual Go</div>
+        </div>
+        <button id="btn-add-show-item" class="btn-new">+ Add Item</button>
+      </div>
+      <div id="show-timeline" class="show-timeline"></div>
+    </div>
+
+    <!-- Log Page (Audit Log) -->
+    <div id="page-log" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Audit Log</div>
+          <div class="page-subtitle">Action history · Export · Filter</div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button id="btn-export-log" class="btn-secondary">Export CSV</button>
+          <button id="btn-clear-log" class="btn-secondary">Clear Log</button>
+        </div>
+      </div>
+      <div class="log-filters">
+        <input type="text" id="log-filter-room" class="log-filter-input" placeholder="Filter by room">
+        <input type="text" id="log-filter-user" class="log-filter-input" placeholder="Filter by user">
+        <select id="log-filter-action" class="log-filter-select">
+          <option value="">All actions</option>
+          <option value="START REC">START REC</option>
+          <option value="STOP REC">STOP REC</option>
+          <option value="START STREAM">START STREAM</option>
+          <option value="STOP STREAM">STOP STREAM</option>
+          <option value="START MULTI">START MULTI</option>
+          <option value="STOP MULTI">STOP MULTI</option>
+          <option value="START ALL">START ALL</option>
+          <option value="STOP ALL">STOP ALL</option>
+        </select>
+      </div>
+      <div id="log-container" class="log-container"></div>
+    </div>
+
+    <!-- Settings Page -->
+    <div id="page-settings" class="page">
+      <div class="page-header">
+        <div class="page-title">Settings</div>
+      </div>
+      <div class="settings-container">
+        <div class="settings-section">
+          <div class="settings-label">My Identity</div>
+          <div id="identity-display" class="identity-display"></div>
+          <button id="btn-change-identity" class="btn-secondary">Change Identity</button>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Cloud Sync</div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk-sync-enabled">
+            <span>Enable Cloud Sync</span>
+          </label>
+          <div style="margin-top: 8px;">
+            <input type="text" id="sync-event-code" class="sync-input" placeholder="Event code (e.g. kc-eu-26)">
+            <div id="sync-status" class="sync-status"></div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Event Profile Configuration</div>
+          <div id="settings-profile-name" class="settings-info"></div>
+          <button id="btn-rename-profile" class="btn-secondary">Rename Profile</button>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Rooms</div>
+          <div id="settings-rooms-list"></div>
+          <button id="btn-add-room" class="btn-secondary">+ Add Room</button>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Window Options</div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk-always-on-top">
+            <span>Always on Top</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-tab active" data-page="rooms">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M5 12H3M21 12h-2M12 5V3M12 21v-2M7.05 7.05 5.636 5.636M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414M18.364 5.636l-1.414 1.414"/>
+      </svg>
+      <span>Rooms</span>
+    </button>
+    <button class="nav-tab" data-page="events">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/>
+        <line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+      </svg>
+      <span>Events</span>
+    </button>
+    <button class="nav-tab" data-page="show">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      <span>Show</span>
+    </button>
+    <button class="nav-tab" data-page="log" id="nav-tab-log">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+        <polyline points="10 9 9 9 8 9"/>
+      </svg>
+      <span>Log</span>
+    </button>
+    <button class="nav-tab" data-page="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 1v6m0 6v10M1 12h6m6 0h10"/>
+        <circle cx="12" cy="12" r="10"/>
+      </svg>
+      <span>Settings</span>
+    </button>
+  </nav>
+
+  <!-- Modal for creating/editing profiles -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <div id="modal-title" class="modal-title"></div>
+        <button id="modal-close" class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="modal-input" class="modal-input" placeholder="Enter name">
+      </div>
+      <div class="modal-footer">
+        <button id="modal-cancel" class="btn-cancel">Cancel</button>
+        <button id="modal-confirm" class="btn-confirm">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Identity Onboarding Modal -->
+  <div id="identity-modal" class="modal-overlay">
+    <div class="modal identity-modal">
+      <div class="modal-header">
+        <div class="modal-title">Welcome to vMix Commander</div>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--t2); margin-bottom: 16px;">Please set your identity to continue.</p>
+        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Your Name</label>
+        <input type="text" id="identity-name" class="modal-input" placeholder="e.g. Alex">
+        <label style="display: block; margin: 16px 0 8px; color: var(--t2); font-size: 13px;">Role</label>
+        <select id="identity-role" class="modal-select">
+          <option value="Director">Director (full access)</option>
+          <option value="Operator">Operator (single room)</option>
+          <option value="Observer">Observer (view only)</option>
+        </select>
+        <div id="identity-room-selector" style="display: none; margin-top: 16px;">
+          <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Assigned Room</label>
+          <select id="identity-assigned-room" class="modal-select"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="identity-save" class="btn-confirm">Save Identity</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Show Item Modal -->
+  <div id="show-item-modal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <div id="show-item-modal-title" class="modal-title">Add Timeline Item</div>
+        <button id="show-item-modal-close" class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Time (HH:MM)</label>
+        <input type="time" id="show-item-time" class="modal-input">
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Title</label>
+        <input type="text" id="show-item-title" class="modal-input" placeholder="Session name">
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Room</label>
+        <select id="show-item-room" class="modal-select">
+          <option value="All Rooms">All Rooms</option>
+        </select>
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Action</label>
+        <select id="show-item-action" class="modal-select">
+          <option value="Start Recording">Start Recording</option>
+          <option value="Stop Recording">Stop Recording</option>
+          <option value="Start Streaming">Start Streaming</option>
+          <option value="Stop Streaming">Stop Streaming</option>
+          <option value="Start MultiCorder">Start MultiCorder</option>
+          <option value="Stop MultiCorder">Stop MultiCorder</option>
+          <option value="Start All">Start All</option>
+          <option value="Stop All">Stop All</option>
+        </select>
+        <label class="checkbox-label" style="margin-top: 16px;">
+          <input type="checkbox" id="show-item-auto-run">
+          <span>Auto-run at scheduled time</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button id="show-item-cancel" class="btn-cancel">Cancel</button>
+        <button id="show-item-delete" class="btn-delete" style="display: none;">Delete</button>
+        <button id="show-item-confirm" class="btn-confirm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
