@@ -30,7 +30,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 90px; /* 60px nav + 22px proxy bar + 8px buffer */
+  padding-bottom: 100px; /* 70px nav + 22px proxy bar + 8px buffer */
 }
 
 /* Pages */
@@ -653,7 +653,7 @@ body {
 /* Proxy Status Bar */
 .proxy-status-bar {
   position: fixed;
-  bottom: 60px;
+  bottom: 70px; /* sits directly above the 70px nav bar */
   left: 0;
   right: 0;
   height: 22px;
@@ -665,7 +665,7 @@ body {
   padding: 0 14px;
   font-size: 11px;
   color: var(--t3);
-  z-index: 90;
+  z-index: 95;
   user-select: none;
 }
 
@@ -1006,6 +1006,8 @@ body {
   .bottom-nav { height: 58px; padding: 0 8px; }
   .nav-tab { font-size: 9px; gap: 2px; }
   .nav-tab svg { width: 20px; height: 20px; }
+  .proxy-status-bar { bottom: 58px; }
+  #app { padding-bottom: 88px; } /* 58px nav + 22px bar + 8px */
 }
 
 /* Tiny window (< 400px) — ultra compact */
