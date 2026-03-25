@@ -78,10 +78,11 @@ function startProxyServer() {
   proxy.listen(PROXY_PORT, () => {
     proxyState.running = true;
     console.log(`[Proxy] Running on port ${PROXY_PORT} — local IP: ${proxyState.localIp}`);
-    // Notify renderer if window is ready
     if (mainWindow) {
       mainWindow.webContents.send('proxy:status', proxyState);
     }
+    // Start tunnel only after proxy is confirmed listening
+    startTunnel();
   });
 
   proxy.on('error', (err) => {
@@ -90,6 +91,9 @@ function startProxyServer() {
     if (mainWindow) {
       mainWindow.webContents.send('proxy:status', { ...proxyState, error: err.message });
     }
+    // Retry proxy after 3s (handles port-in-use from previous instance)
+    console.log('[Proxy] Retrying in 3s…');
+    setTimeout(startProxyServer, 3000);
   });
 }
 // ─── End Proxy ───────────────────────────────────────────────────────────────
@@ -336,8 +340,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  startProxyServer();
-  startTunnel();
+  startProxyServer(); // tunnel starts automatically once proxy is up
   createWindow();
 
   // Send proxy status once the renderer is ready
@@ -521,6 +524,9 @@ ipcMain.handle('tunnel:getStatus', () => {
 // Tunnel restart handler
 ipcMain.handle('tunnel:restart', () => {
   stopTunnel();
-  setTimeout(startTunnel, 1000);
+  // Only restart tunnel (proxy is already running)
+  if (proxyState.running) {
+    setTimeout(startTunnel, 1000);
+  }
   return { ok: true };
 });
