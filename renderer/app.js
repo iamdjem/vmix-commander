@@ -40,94 +40,106 @@ function updateProxyStatusBar(status) {
   }
 }
 
-// Listen for proxy status pushed from main process
-if (window.proxy) {
-  window.proxy.onStatus(updateProxyStatusBar);
-  window.proxy.getStatus().then(updateProxyStatusBar);
-}
+// proxy listeners are set up in the Tunnel Status block below
 
 // ─── Tunnel Status ────────────────────────────────────────────────────────────
 let _currentTunnelUrl = '';
 
-function updateTunnelStatusBar(status) {
-  const dot    = document.getElementById('tunnel-indicator');
-  const label  = document.getElementById('tunnel-label');
-  const urlEl  = document.getElementById('tunnel-url');
-  const qrBtn  = document.getElementById('btn-show-qr');
+function renderTunnelQr(url) {
+  const container = document.getElementById('tpage-qr-container');
+  const urlLabel  = document.getElementById('tpage-qr-url');
+  if (!container) return;
+
+  const trackerUrl = `https://iamdjem.github.io/kubecon-tracker/?proxy=${encodeURIComponent(url)}`;
+  container.innerHTML = '';
+  new QRCode(container, {
+    text: trackerUrl,
+    width: 240,
+    height: 240,
+    colorDark: '#000000',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M
+  });
+  if (urlLabel) urlLabel.textContent = trackerUrl;
+}
+
+function updateTunnelPage(status) {
+  _currentTunnelUrl = status.url || '';
+
+  // Update tunnel page indicators
+  const dot   = document.getElementById('tpage-tunnel-indicator');
+  const label = document.getElementById('tpage-tunnel-label');
+  const urlEl = document.getElementById('tpage-tunnel-url');
+  const qrBox = document.getElementById('tpage-qr-container');
 
   if (!dot) return;
 
-  _currentTunnelUrl = status.url || '';
-
   if (status.running && status.url) {
     dot.className = 'proxy-dot running';
-    label.textContent = 'Tunnel:';
+    label.textContent = 'Running';
     urlEl.textContent = status.url;
-    qrBtn.style.display = 'inline-block';
+    renderTunnelQr(status.url);
   } else if (status.error) {
     dot.className = 'proxy-dot failed';
-    label.textContent = `Tunnel failed`;
+    label.textContent = 'Failed';
     urlEl.textContent = status.error;
-    qrBtn.style.display = 'none';
+    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:13px;">Tunnel failed — click Restart</p>';
   } else {
     dot.className = 'proxy-dot pending';
-    label.textContent = 'Tunnel starting…';
+    label.textContent = 'Starting…';
     urlEl.textContent = '';
-    qrBtn.style.display = 'none';
+    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:13px;">Waiting for tunnel…</p>';
+  }
+}
+
+function updateProxyPage(status) {
+  const dot   = document.getElementById('tpage-proxy-indicator');
+  const label = document.getElementById('tpage-proxy-label');
+  const urlEl = document.getElementById('tpage-proxy-url');
+  if (!dot) return;
+
+  if (status.running) {
+    dot.className = 'proxy-dot running';
+    label.textContent = 'Running';
+    urlEl.textContent = status.localIp ? `http://${status.localIp}:${status.port}` : `Port ${status.port}`;
+  } else if (status.error) {
+    dot.className = 'proxy-dot failed';
+    label.textContent = 'Failed';
+    urlEl.textContent = status.error || '';
+  } else {
+    dot.className = 'proxy-dot pending';
+    label.textContent = 'Starting…';
+    urlEl.textContent = '';
   }
 }
 
 if (window.tunnel) {
-  window.tunnel.onStatus(updateTunnelStatusBar);
-  window.tunnel.getStatus().then(updateTunnelStatusBar);
+  window.tunnel.onStatus(updateTunnelPage);
+  window.tunnel.getStatus().then(updateTunnelPage);
 }
 
-// QR modal
+if (window.proxy) {
+  window.proxy.onStatus((s) => { updateProxyStatusBar(s); updateProxyPage(s); });
+  window.proxy.getStatus().then((s) => { updateProxyStatusBar(s); updateProxyPage(s); });
+}
+
+// Restart tunnel button (on tunnel page)
 document.addEventListener('DOMContentLoaded', () => {
-  const qrBtn     = document.getElementById('btn-show-qr');
   const restartBtn = document.getElementById('btn-restart-tunnel');
-  const modal     = document.getElementById('qr-modal');
-  const closeBtn  = document.getElementById('qr-modal-close');
-  const container = document.getElementById('qr-code-container');
-  const urlLabel  = document.getElementById('qr-tunnel-url');
-
-  if (qrBtn) {
-    qrBtn.addEventListener('click', () => {
-      if (!_currentTunnelUrl) return;
-      // Build tracker URL with proxy pre-configured
-      const trackerUrl = `https://iamdjem.github.io/kubecon-tracker/?proxy=${encodeURIComponent(_currentTunnelUrl)}`;
-      container.innerHTML = '';
-      new QRCode(container, {
-        text: trackerUrl,
-        width: 220,
-        height: 220,
-        colorDark: '#000000',
-        colorLight: '#ffffff',
-        correctLevel: QRCode.CorrectLevel.M
-      });
-      urlLabel.textContent = trackerUrl;
-      modal.style.display = 'flex';
-    });
-  }
-
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-  }
-
-  if (modal) {
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.style.display = 'none';
-    });
-  }
-
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
       if (window.tunnel) {
-        updateTunnelStatusBar({ running: false, url: '', error: '' });
+        updateTunnelPage({ running: false, url: '', error: '' });
         window.tunnel.restart();
       }
     });
   }
+
+  // QR modal close (legacy modal kept for possible future use)
+  const closeBtn = document.getElementById('qr-modal-close');
+  const modal    = document.getElementById('qr-modal');
+  if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+  if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
 });
 // ─── End Tunnel Status ────────────────────────────────────────────────────────
 

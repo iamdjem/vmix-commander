@@ -30,7 +30,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 96px; /* 60px nav + 26px proxy bar + 10px buffer */
+  padding-bottom: 90px; /* 60px nav + 22px proxy bar + 8px buffer */
 }
 
 /* Pages */
@@ -656,7 +656,7 @@ body {
   bottom: 60px;
   left: 0;
   right: 0;
-  height: 26px;
+  height: 22px;
   background: #0d0d0d;
   border-top: 1px solid var(--line);
   display: flex;
@@ -712,6 +712,56 @@ body {
 #qr-code-container img {
   border-radius: 8px;
   border: 4px solid #fff;
+}
+
+/* Tunnel Page */
+.tunnel-card {
+  background: var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.tunnel-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.tunnel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tunnel-url-text {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.tunnel-qr-card {
+  text-align: center;
+}
+
+.tpage-qr-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 80px;
+}
+
+.tpage-qr-container canvas,
+.tpage-qr-container img {
+  border-radius: 8px;
+  border: 6px solid #fff;
 }
 
 /* Bottom Navigation */

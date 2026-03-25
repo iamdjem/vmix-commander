@@ -84,6 +84,47 @@
       <div id="log-container" class="log-container"></div>
     </div>
 
+    <!-- Tunnel Page -->
+    <div id="page-tunnel" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Crew Access</div>
+          <div class="page-subtitle">Cloudflare Tunnel · QR Code · Proxy Status</div>
+        </div>
+        <button id="btn-restart-tunnel" class="btn-secondary">↺ Restart Tunnel</button>
+      </div>
+
+      <!-- Proxy status card -->
+      <div class="tunnel-card">
+        <div class="tunnel-card-title">HTTP Proxy</div>
+        <div class="tunnel-row">
+          <span id="tpage-proxy-indicator" class="proxy-dot pending">●</span>
+          <span id="tpage-proxy-label" style="color:var(--t2)">Starting…</span>
+        </div>
+        <div id="tpage-proxy-url" class="tunnel-url-text"></div>
+      </div>
+
+      <!-- Tunnel status card -->
+      <div class="tunnel-card">
+        <div class="tunnel-card-title">Cloudflare Tunnel (HTTPS)</div>
+        <div class="tunnel-row">
+          <span id="tpage-tunnel-indicator" class="proxy-dot pending">●</span>
+          <span id="tpage-tunnel-label" style="color:var(--t2)">Starting…</span>
+        </div>
+        <div id="tpage-tunnel-url" class="tunnel-url-text"></div>
+      </div>
+
+      <!-- QR code card -->
+      <div class="tunnel-card tunnel-qr-card">
+        <div class="tunnel-card-title">Crew Tracker QR Code</div>
+        <p style="color:var(--t2); font-size:13px; margin-bottom:16px;">Scan to open the tracker — proxy URL is pre-configured automatically.</p>
+        <div id="tpage-qr-container" class="tpage-qr-container">
+          <p style="color:var(--t3); font-size:13px;">Waiting for tunnel…</p>
+        </div>
+        <p id="tpage-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all;"></p>
+      </div>
+    </div>
+
     <!-- Settings Page -->
     <div id="page-settings" class="page">
       <div class="page-header">
@@ -131,16 +172,10 @@
     </div>
   </div>
 
-  <!-- Proxy + Tunnel Status Bar -->
+  <!-- Thin proxy status bar (proxy only, one line) -->
   <div id="proxy-status-bar" class="proxy-status-bar">
     <span id="proxy-indicator" class="proxy-dot">●</span>
     <span id="proxy-label">Proxy starting…</span>
-    <span class="proxy-sep">|</span>
-    <span id="tunnel-indicator" class="proxy-dot pending">●</span>
-    <span id="tunnel-label">Tunnel starting…</span>
-    <span id="tunnel-url" class="proxy-url"></span>
-    <button id="btn-show-qr" class="qr-btn" style="display:none" title="Show QR code">⬛ QR</button>
-    <button id="btn-restart-tunnel" class="qr-btn" title="Restart tunnel">↺</button>
   </div>
 
   <!-- QR Modal -->
@@ -191,6 +226,14 @@
         <polyline points="10 9 9 9 8 9"/>
       </svg>
       <span>Log</span>
+    </button>
+    <button class="nav-tab" data-page="tunnel">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <path d="M8 21h8M12 17v4"/>
+        <path d="M7 8l3 3-3 3M13 11h4"/>
+      </svg>
+      <span>Tunnel</span>
     </button>
     <button class="nav-tab" data-page="settings">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
