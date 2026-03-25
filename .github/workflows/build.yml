@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -23,7 +26,8 @@ jobs:
       - name: Build Windows installer
         run: npm run build:win
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          EP_DRAFT: true
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -47,7 +51,8 @@ jobs:
       - name: Build macOS DMG
         run: npm run build:mac
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          EP_DRAFT: true
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
