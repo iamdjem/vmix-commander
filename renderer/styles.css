@@ -30,7 +30,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 70px;
+  padding-bottom: 96px; /* 60px nav + 26px proxy bar + 10px buffer */
 }
 
 /* Pages */
@@ -648,6 +648,41 @@ body {
   height: 18px;
   cursor: pointer;
   accent-color: var(--accent);
+}
+
+/* Proxy Status Bar */
+.proxy-status-bar {
+  position: fixed;
+  bottom: 60px;
+  left: 0;
+  right: 0;
+  height: 26px;
+  background: #0d0d0d;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  font-size: 11px;
+  color: var(--t3);
+  z-index: 90;
+  user-select: none;
+}
+
+.proxy-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.proxy-dot.running { color: var(--green); }
+.proxy-dot.failed  { color: var(--red); }
+.proxy-dot.pending { color: #888; }
+
+.proxy-url {
+  margin-left: 4px;
+  color: var(--t2);
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 11px;
 }
 
 /* Bottom Navigation */

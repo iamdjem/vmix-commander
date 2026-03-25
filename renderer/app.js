@@ -17,6 +17,37 @@ let firebaseDb = null;
 let firebaseRef = null;
 
 // Initialize app
+// ─── Proxy Status Bar ────────────────────────────────────────────────────────
+function updateProxyStatusBar(status) {
+  const dot   = document.getElementById('proxy-indicator');
+  const label = document.getElementById('proxy-label');
+  const url   = document.getElementById('proxy-url');
+
+  if (!dot) return;
+
+  if (status.running) {
+    dot.className = 'proxy-dot running';
+    label.textContent = `Proxy running on port ${status.port}`;
+    url.textContent = status.localIp ? `http://${status.localIp}:${status.port}` : '';
+  } else if (status.error) {
+    dot.className = 'proxy-dot failed';
+    label.textContent = `Proxy failed: ${status.error}`;
+    url.textContent = '';
+  } else {
+    dot.className = 'proxy-dot pending';
+    label.textContent = 'Proxy starting…';
+    url.textContent = '';
+  }
+}
+
+// Listen for proxy status pushed from main process
+if (window.proxy) {
+  window.proxy.onStatus(updateProxyStatusBar);
+  // Also fetch current status on load (in case event already fired)
+  window.proxy.getStatus().then(updateProxyStatusBar);
+}
+// ─── End Proxy Status Bar ────────────────────────────────────────────────────
+
 async function init() {
   // Load identity first - required before anything else
   await loadIdentity();

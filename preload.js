@@ -55,3 +55,11 @@ contextBridge.exposeInMainWorld('identity', {
   // Save identity
   save: (identity) => ipcRenderer.invoke('identity:save', identity)
 });
+
+contextBridge.exposeInMainWorld('proxy', {
+  // Get proxy status: { running, port, localIp }
+  getStatus: () => ipcRenderer.invoke('proxy:getStatus'),
+
+  // Listen for proxy status updates pushed from main
+  onStatus: (callback) => ipcRenderer.on('proxy:status', (_, status) => callback(status))
+});

@@ -2,6 +2,96 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+
+// ─── Proxy State ────────────────────────────────────────────────────────────
+const PROXY_PORT = 8080;
+let proxyState = { running: false, port: PROXY_PORT, localIp: '' };
+
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+function startProxyServer() {
+  proxyState.localIp = getLocalIp();
+
+  const proxy = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url, `http://localhost:${PROXY_PORT}`);
+
+    // Only handle /vmix-proxy
+    if (parsedUrl.pathname !== '/vmix-proxy') {
+      res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Not found. Use /vmix-proxy?ip=<ip>&fn=<function>' }));
+      return;
+    }
+
+    const ip = parsedUrl.searchParams.get('ip');
+    const fn = parsedUrl.searchParams.get('fn') || '';
+
+    if (!ip) {
+      res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Missing required parameter: ip' }));
+      return;
+    }
+
+    const targetUrl = fn
+      ? `http://${ip}:8088/api/?Function=${encodeURIComponent(fn)}`
+      : `http://${ip}:8088/api`;
+
+    const vmixReq = http.get(targetUrl, { timeout: 4000 }, (vmixRes) => {
+      let body = '';
+      vmixRes.on('data', (chunk) => { body += chunk; });
+      vmixRes.on('end', () => {
+        res.writeHead(vmixRes.statusCode || 200, {
+          'Content-Type': vmixRes.headers['content-type'] || 'text/xml',
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(body);
+      });
+    });
+
+    vmixReq.on('error', (err) => {
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+
+    vmixReq.on('timeout', () => {
+      vmixReq.destroy();
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: 'Timeout connecting to vMix' }));
+      }
+    });
+  });
+
+  proxy.listen(PROXY_PORT, () => {
+    proxyState.running = true;
+    console.log(`[Proxy] Running on port ${PROXY_PORT} — local IP: ${proxyState.localIp}`);
+    // Notify renderer if window is ready
+    if (mainWindow) {
+      mainWindow.webContents.send('proxy:status', proxyState);
+    }
+  });
+
+  proxy.on('error', (err) => {
+    proxyState.running = false;
+    console.error(`[Proxy] Failed to start: ${err.message}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('proxy:status', { ...proxyState, error: err.message });
+    }
+  });
+}
+// ─── End Proxy ───────────────────────────────────────────────────────────────
 
 let mainWindow;
 
@@ -174,7 +264,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  startProxyServer();
   createWindow();
+
+  // Send proxy status once the renderer is ready
+  app.on('browser-window-created', (_, win) => {
+    win.webContents.once('did-finish-load', () => {
+      win.webContents.send('proxy:status', proxyState);
+    });
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -330,4 +428,9 @@ ipcMain.handle('identity:get', () => {
 
 ipcMain.handle('identity:save', (event, identity) => {
   return saveIdentity(identity);
+});
+
+// Proxy status handler
+ipcMain.handle('proxy:getStatus', () => {
+  return proxyState;
 });
