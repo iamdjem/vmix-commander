@@ -131,11 +131,31 @@
     </div>
   </div>
 
-  <!-- Proxy Status Bar -->
+  <!-- Proxy + Tunnel Status Bar -->
   <div id="proxy-status-bar" class="proxy-status-bar">
     <span id="proxy-indicator" class="proxy-dot">●</span>
     <span id="proxy-label">Proxy starting…</span>
-    <span id="proxy-url" class="proxy-url"></span>
+    <span class="proxy-sep">|</span>
+    <span id="tunnel-indicator" class="proxy-dot pending">●</span>
+    <span id="tunnel-label">Tunnel starting…</span>
+    <span id="tunnel-url" class="proxy-url"></span>
+    <button id="btn-show-qr" class="qr-btn" style="display:none" title="Show QR code">⬛ QR</button>
+    <button id="btn-restart-tunnel" class="qr-btn" title="Restart tunnel">↺</button>
+  </div>
+
+  <!-- QR Modal -->
+  <div id="qr-modal" class="modal-overlay" style="display:none">
+    <div class="modal qr-modal-inner">
+      <div class="modal-header">
+        <div class="modal-title">📱 Crew Access QR Code</div>
+        <button id="qr-modal-close" class="modal-close">✕</button>
+      </div>
+      <div class="modal-body" style="text-align:center; padding: 24px 16px;">
+        <p style="color:var(--t2); font-size:13px; margin-bottom:16px;">Crew members scan this to open the tracker with the proxy pre-configured.</p>
+        <div id="qr-code-container"></div>
+        <p id="qr-tunnel-url" style="color:var(--t3); font-size:11px; font-family:monospace; margin-top:12px; word-break:break-all;"></p>
+      </div>
+    </div>
   </div>
 
   <!-- Bottom Navigation -->
@@ -269,6 +289,7 @@
   <!-- Toast notifications -->
   <div id="toast" class="toast"></div>
 
+  <script src="qrcode.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

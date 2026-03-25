@@ -685,6 +685,35 @@ body {
   font-size: 11px;
 }
 
+.proxy-sep {
+  color: var(--line2);
+  margin: 0 4px;
+}
+
+.qr-btn {
+  background: var(--line2);
+  border: none;
+  border-radius: 3px;
+  color: var(--t2);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: background 0.15s;
+}
+.qr-btn:hover { background: var(--accent); color: #fff; }
+
+.qr-modal-inner {
+  max-width: 320px;
+  width: 90%;
+}
+
+#qr-code-container canvas,
+#qr-code-container img {
+  border-radius: 8px;
+  border: 4px solid #fff;
+}
+
 /* Bottom Navigation */
 .bottom-nav {
   position: fixed;

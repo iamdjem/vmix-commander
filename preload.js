@@ -63,3 +63,14 @@ contextBridge.exposeInMainWorld('proxy', {
   // Listen for proxy status updates pushed from main
   onStatus: (callback) => ipcRenderer.on('proxy:status', (_, status) => callback(status))
 });
+
+contextBridge.exposeInMainWorld('tunnel', {
+  // Get tunnel status: { running, url, error }
+  getStatus: () => ipcRenderer.invoke('tunnel:getStatus'),
+
+  // Restart tunnel
+  restart: () => ipcRenderer.invoke('tunnel:restart'),
+
+  // Listen for tunnel status updates pushed from main
+  onStatus: (callback) => ipcRenderer.on('tunnel:status', (_, status) => callback(status))
+});

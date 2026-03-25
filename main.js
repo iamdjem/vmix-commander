@@ -3,6 +3,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { spawn } = require('child_process');
 
 // ─── Proxy State ────────────────────────────────────────────────────────────
 const PROXY_PORT = 8080;
@@ -92,6 +93,77 @@ function startProxyServer() {
   });
 }
 // ─── End Proxy ───────────────────────────────────────────────────────────────
+
+// ─── Cloudflare Tunnel ───────────────────────────────────────────────────────
+let tunnelState = { running: false, url: '', error: '' };
+let tunnelProcess = null;
+
+function getCloudflaredBin() {
+  // When packaged, asar-unpacked files live in app.asar.unpacked
+  const binDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'bin')
+    : path.join(__dirname, 'bin');
+  if (process.platform === 'win32') {
+    return path.join(binDir, 'cloudflared-win.exe');
+  }
+  return path.join(binDir, 'cloudflared-mac');
+}
+
+function startTunnel() {
+  const bin = getCloudflaredBin();
+  if (!fs.existsSync(bin)) {
+    tunnelState = { running: false, url: '', error: 'cloudflared binary not found' };
+    console.error('[Tunnel] Binary not found:', bin);
+    return;
+  }
+
+  console.log('[Tunnel] Starting cloudflared tunnel on port', PROXY_PORT);
+
+  tunnelProcess = spawn(bin, [
+    'tunnel', '--url', `http://localhost:${PROXY_PORT}`,
+    '--no-autoupdate'
+  ]);
+
+  tunnelProcess.stderr.on('data', (data) => {
+    const text = data.toString();
+    // cloudflared logs the URL to stderr
+    const match = text.match(/https:\/\/[a-z0-9\-]+\.trycloudflare\.com/);
+    if (match && !tunnelState.running) {
+      tunnelState = { running: true, url: match[0], error: '' };
+      console.log('[Tunnel] URL:', tunnelState.url);
+      if (mainWindow) {
+        mainWindow.webContents.send('tunnel:status', tunnelState);
+      }
+    }
+  });
+
+  tunnelProcess.on('error', (err) => {
+    tunnelState = { running: false, url: '', error: err.message };
+    console.error('[Tunnel] Error:', err.message);
+    if (mainWindow) {
+      mainWindow.webContents.send('tunnel:status', tunnelState);
+    }
+  });
+
+  tunnelProcess.on('exit', (code) => {
+    if (tunnelState.running) {
+      tunnelState = { running: false, url: '', error: `exited with code ${code}` };
+      if (mainWindow) {
+        mainWindow.webContents.send('tunnel:status', tunnelState);
+      }
+    }
+    tunnelProcess = null;
+  });
+}
+
+function stopTunnel() {
+  if (tunnelProcess) {
+    tunnelProcess.kill();
+    tunnelProcess = null;
+  }
+  tunnelState = { running: false, url: '', error: '' };
+}
+// ─── End Cloudflare Tunnel ───────────────────────────────────────────────────
 
 let mainWindow;
 
@@ -265,6 +337,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   startProxyServer();
+  startTunnel();
   createWindow();
 
   // Send proxy status once the renderer is ready
@@ -282,9 +355,14 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopTunnel();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  stopTunnel();
 });
 
 // IPC Handlers
@@ -433,4 +511,16 @@ ipcMain.handle('identity:save', (event, identity) => {
 // Proxy status handler
 ipcMain.handle('proxy:getStatus', () => {
   return proxyState;
+});
+
+// Tunnel status handler
+ipcMain.handle('tunnel:getStatus', () => {
+  return tunnelState;
+});
+
+// Tunnel restart handler
+ipcMain.handle('tunnel:restart', () => {
+  stopTunnel();
+  setTimeout(startTunnel, 1000);
+  return { ok: true };
 });
