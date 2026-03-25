@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -138,6 +139,8 @@ function startTunnel() {
       if (mainWindow) {
         mainWindow.webContents.send('tunnel:status', tunnelState);
       }
+      // Push tunnel URL to Firebase so PWA-installed tracker gets it automatically
+      pushTunnelUrlToFirebase(tunnelState.url);
     }
   });
 
@@ -166,6 +169,23 @@ function stopTunnel() {
     tunnelProcess = null;
   }
   tunnelState = { running: false, url: '', error: '' };
+  // Clear proxy URL from Firebase when tunnel stops
+  pushTunnelUrlToFirebase(null);
+}
+
+function pushTunnelUrlToFirebase(url) {
+  // Firebase REST API — no SDK needed, no auth required for this public DB
+  const fbUrl = 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app/e3-kc26-x7k9m/vmix_proxy_url.json';
+  const body = JSON.stringify(url || null);
+  const req = https.request(fbUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, (res) => {
+    console.log(`[Firebase] Proxy URL ${url ? 'pushed' : 'cleared'} — HTTP ${res.statusCode}`);
+  });
+  req.on('error', (err) => console.error('[Firebase] Push failed:', err.message));
+  req.write(body);
+  req.end();
 }
 // ─── End Cloudflare Tunnel ───────────────────────────────────────────────────
 
