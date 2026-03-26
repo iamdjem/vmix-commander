@@ -29,7 +29,8 @@
     },
     "win": {
       "target": "nsis"
-    }
+    },
+    "publish": null
   },
   "keywords": ["vmix", "control", "live", "production", "streaming"],
   "author": "",
