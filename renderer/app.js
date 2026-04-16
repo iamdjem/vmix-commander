@@ -3,6 +3,7 @@ let appState = {
   current: 'default',
   profiles: {},
   vmixStatus: {},
+  vmixHealth: {},  // { roomKey: { latency, lastSeen, failures, tier } }
   currentPage: 'rooms',
   identity: null,
   syncEnabled: false,
@@ -13,6 +14,32 @@ let appState = {
 
 let statusRefreshInterval = null;
 let showAutoTriggerInterval = null;
+let recordingTimerInterval = null;
+const recordingStartTimes = {};  // { roomKey: timestamp }
+
+// Format ms duration as H:MM:SS or MM:SS
+function formatDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+// Update all recording timer displays every second
+function startRecordingTimers() {
+  if (recordingTimerInterval) return;
+  recordingTimerInterval = setInterval(() => {
+    for (const [roomKey, startTime] of Object.entries(recordingStartTimes)) {
+      const el = document.getElementById(`rec-timer-${roomKey}`);
+      if (el) {
+        el.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - startTime)}`;
+        el.classList.add('active');
+      }
+    }
+  }, 1000);
+}
 let firebaseDb = null;
 let firebaseRef = null;
 
@@ -21,22 +48,18 @@ let firebaseRef = null;
 function updateProxyStatusBar(status) {
   const dot   = document.getElementById('proxy-indicator');
   const label = document.getElementById('proxy-label');
-  const url   = document.getElementById('proxy-url');
 
   if (!dot) return;
 
   if (status.running) {
     dot.className = 'proxy-dot running';
-    label.textContent = `Proxy running on port ${status.port}`;
-    url.textContent = status.localIp ? `http://${status.localIp}:${status.port}` : '';
+    label.textContent = `vMix Proxy · Port ${status.port}`;
   } else if (status.error) {
     dot.className = 'proxy-dot failed';
-    label.textContent = `Proxy failed: ${status.error}`;
-    url.textContent = '';
+    label.textContent = 'vMix Proxy · Error';
   } else {
     dot.className = 'proxy-dot pending';
-    label.textContent = 'Proxy starting…';
-    url.textContent = '';
+    label.textContent = 'vMix Proxy · Starting…';
   }
 }
 
@@ -83,12 +106,12 @@ function updateTunnelPage(status) {
     dot.className = 'proxy-dot failed';
     label.textContent = 'Failed';
     urlEl.textContent = status.error;
-    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:13px;">Tunnel failed — click Restart</p>';
+    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Tunnel failed — click Restart</p>';
   } else {
     dot.className = 'proxy-dot pending';
     label.textContent = 'Starting…';
     urlEl.textContent = '';
-    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:13px;">Waiting for tunnel…</p>';
+    if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Waiting for tunnel…</p>';
   }
 }
 
@@ -212,10 +235,59 @@ function getCurrentProfile() {
   return appState.profiles[appState.current] || { name: 'Unknown', rooms: [] };
 }
 
-// Update profile badge in header
+// Conference switcher
 function updateProfileBadge() {
   const profile = getCurrentProfile();
-  document.getElementById('profile-name').textContent = profile.name;
+  const nameEl = document.getElementById('conference-name');
+  if (nameEl) nameEl.textContent = profile.name;
+  renderConferenceDropdown();
+}
+
+function renderConferenceDropdown() {
+  const list = document.getElementById('conference-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  Object.keys(appState.profiles).forEach(key => {
+    const profile = appState.profiles[key];
+    const item = document.createElement('button');
+    item.className = 'conference-dropdown-item' + (key === appState.current ? ' active' : '');
+    item.textContent = profile.name;
+    item.onclick = (e) => {
+      e.stopPropagation();
+      closeConferenceDropdown();
+      if (key !== appState.current) {
+        switchProfile(key);
+      }
+    };
+    list.appendChild(item);
+  });
+}
+
+function toggleConferenceDropdown() {
+  const dropdown = document.getElementById('conference-dropdown');
+  dropdown.classList.toggle('open');
+  if (dropdown.classList.contains('open')) {
+    renderConferenceDropdown();
+    // Close on outside click
+    setTimeout(() => {
+      document.addEventListener('click', closeConferenceDropdownOnOutside, { once: true });
+    }, 0);
+  }
+}
+
+function closeConferenceDropdown() {
+  document.getElementById('conference-dropdown').classList.remove('open');
+}
+
+function closeConferenceDropdownOnOutside(e) {
+  const switcher = document.getElementById('conference-switcher');
+  if (!switcher.contains(e.target)) {
+    closeConferenceDropdown();
+  } else {
+    // Re-attach if click was inside
+    document.addEventListener('click', closeConferenceDropdownOnOutside, { once: true });
+  }
 }
 
 // Navigation
@@ -233,7 +305,14 @@ function switchPage(page) {
 
   // Update page visibility
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById(`page-${page}`).classList.add('active');
+  const pageEl = document.getElementById(`page-${page}`);
+  pageEl.classList.add('active');
+
+  // Update header title from page data attribute
+  const headerTitle = document.getElementById('header-page-title');
+  if (headerTitle && pageEl.dataset.title) {
+    headerTitle.textContent = pageEl.dataset.title;
+  }
 
   // Update nav tabs
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
@@ -244,6 +323,7 @@ function switchPage(page) {
   if (page === 'rooms') {
     renderRooms();
     startStatusRefresh();
+    startRecordingTimers();
   } else {
     stopStatusRefresh();
   }
@@ -425,6 +505,36 @@ function setupEventListeners() {
   document.getElementById('btn-add-show-item').addEventListener('click', () => {
     showAddShowItemModal();
   });
+
+  // Conference switcher
+  document.getElementById('conference-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleConferenceDropdown();
+  });
+
+  document.getElementById('conference-add').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeConferenceDropdown();
+    showModal('New Conference', '', (name) => {
+      if (!name) return;
+      const key = 'profile_' + Date.now();
+      appState.profiles[key] = {
+        name,
+        rooms: [
+          { key: 'room1', name: 'Room 1', ip: '' },
+          { key: 'room2', name: 'Room 2', ip: '' },
+          { key: 'room3', name: 'Room 3', ip: '' }
+        ]
+      };
+      appState.current = key;
+      saveProfiles();
+      updateProfileBadge();
+      if (appState.currentPage === 'rooms') renderRooms();
+      if (appState.currentPage === 'events') renderProfiles();
+      if (appState.currentPage === 'settings') renderSettings();
+      showToast('Conference created');
+    });
+  });
 }
 
 // Render rooms page
@@ -438,6 +548,11 @@ function renderRooms() {
   // Apply Operator filter: show only assigned room
   if (appState.identity && appState.identity.role === 'Operator' && appState.identity.assignedRoom) {
     roomsToShow = profile.rooms.filter(r => r.key === appState.identity.assignedRoom);
+  }
+
+  if (roomsToShow.length === 0) {
+    container.innerHTML = '<div class="empty-state">No rooms configured. Tap the settings icon to add rooms.</div>';
+    return;
   }
 
   roomsToShow.forEach(room => {
@@ -509,143 +624,109 @@ function createRoomCard(room) {
   const name = document.createElement('div');
   name.className = 'room-name';
   name.textContent = room.name;
-  name.onclick = () => editRoomNameInline(room.key, name);
+  name.title = room.name;
 
-  const badges = document.createElement('div');
-  badges.className = 'room-badges';
+  // Health info
+  const health = appState.vmixHealth[room.key] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const healthEl = document.createElement('div');
+  healthEl.className = `room-health ${health.tier}`;
 
-  const activeFns = [
-    { on: status.recording, label: 'REC', color: '#ff5555' },
-    { on: status.streaming, label: 'STREAM', color: '#ffaa00' },
-    { on: status.multicorder, label: 'MULTI', color: '#55aaff' }
-  ];
+  const healthDot = document.createElement('span');
+  healthDot.className = 'room-health-dot';
 
-  let anyActive = false;
-  activeFns.forEach(fn => {
-    if (fn.on) {
-      anyActive = true;
-      const badge = document.createElement('span');
-      badge.className = 'status-badge active';
-      badge.textContent = '● ' + fn.label;
-      badge.style.color = fn.color;
-      badges.appendChild(badge);
-    }
-  });
+  const healthLabel = document.createElement('span');
+  healthLabel.className = 'room-health-label';
 
-  if (!anyActive && connected) {
-    const badge = document.createElement('span');
-    badge.className = 'status-badge idle';
-    badge.textContent = 'IDLE';
-    badges.appendChild(badge);
+  if (!room.ip) {
+    healthEl.className = 'room-health offline';
+    healthLabel.textContent = 'No IP';
+  } else if (health.tier === 'healthy') {
+    healthLabel.textContent = `Ping ${health.latency}ms`;
+  } else if (health.tier === 'degraded') {
+    healthLabel.textContent = health.failures > 0 ? 'Reconnecting…' : `Ping ${health.latency}ms`;
+  } else if (health.tier === 'unreachable') {
+    const ago = health.lastSeen ? Math.round((Date.now() - health.lastSeen) / 1000) : 0;
+    healthLabel.textContent = ago > 0 ? `Offline ${ago}s` : 'Offline';
+  } else {
+    healthLabel.textContent = 'Connecting…';
   }
 
-  if (error) {
-    const badge = document.createElement('span');
-    badge.className = 'status-badge error';
-    badge.textContent = 'ERROR';
-    badges.appendChild(badge);
+  healthEl.appendChild(healthDot);
+  healthEl.appendChild(healthLabel);
+
+  // Recording timer
+  const timerEl = document.createElement('div');
+  timerEl.className = 'room-rec-timer';
+  timerEl.id = `rec-timer-${room.key}`;
+  if (recordingStartTimes[room.key]) {
+    timerEl.classList.add('active');
+    timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[room.key])}`;
   }
 
   nameWrap.appendChild(name);
-  nameWrap.appendChild(badges);
+  nameWrap.appendChild(timerEl);
+  nameWrap.appendChild(healthEl);
 
-  const ipToggle = document.createElement('button');
-  ipToggle.className = 'ip-toggle';
-  ipToggle.textContent = room.ip ? '⚙' : '+ IP';
-  ipToggle.title = room.ip || 'Set IP';
-  ipToggle.onclick = () => toggleIpRow(room.key);
+  const settingsBtn = document.createElement('button');
+  settingsBtn.className = 'room-settings-btn';
+  settingsBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  settingsBtn.title = 'Room settings';
+  settingsBtn.onclick = () => openRoomSettings(room.key);
 
   header.appendChild(dragHandle);
   header.appendChild(nameWrap);
-  header.appendChild(ipToggle);
-
-  // IP row
-  const ipRow = document.createElement('div');
-  ipRow.className = 'ip-row';
-  ipRow.id = `ip-row-${room.key}`;
-  ipRow.style.display = 'none';
-
-  const ipInput = document.createElement('input');
-  ipInput.type = 'text';
-  ipInput.className = 'ip-input';
-  ipInput.placeholder = '10.x.x.x';
-  ipInput.value = room.ip;
-
-  const saveIpBtn = document.createElement('button');
-  saveIpBtn.className = 'btn-save-ip';
-  saveIpBtn.textContent = 'Save';
-  saveIpBtn.onclick = () => saveIp(room.key, ipInput.value);
-
-  ipRow.appendChild(ipInput);
-  ipRow.appendChild(saveIpBtn);
+  header.appendChild(settingsBtn);
 
   // Function controls
   const controls = document.createElement('div');
   controls.className = 'room-controls';
 
   const functions = [
-    { label: 'REC', startFn: 'StartRecording', stopFn: 'StopRecording', on: status.recording },
-    { label: 'STREAM', startFn: 'StartStreaming', stopFn: 'StopStreaming', on: status.streaming },
-    { label: 'MULTI', startFn: 'StartMultiCorder', stopFn: 'StopMultiCorder', on: status.multicorder }
+    { label: 'Record', startFn: 'StartRecording', stopFn: 'StopRecording', on: status.recording },
+    { label: 'Stream', startFn: 'StartStreaming', stopFn: 'StopStreaming', on: status.streaming },
+    { label: 'MultiCorder', startFn: 'StartMultiCorder', stopFn: 'StopMultiCorder', on: status.multicorder }
   ];
 
   functions.forEach(fn => {
     const fnControl = document.createElement('div');
     fnControl.className = 'fn-control';
 
-    const fnHeader = document.createElement('div');
-    fnHeader.className = 'fn-header';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = `fn-toggle ${error ? 'error' : fn.on ? 'active' : 'inactive'}`;
 
-    const fnLabel = document.createElement('div');
-    fnLabel.className = 'fn-label';
-    fnLabel.textContent = fn.label;
+    const toggleLabel = document.createElement('span');
+    toggleLabel.className = 'fn-toggle-label';
+    toggleLabel.textContent = fn.label;
 
-    const fnStatus = document.createElement('div');
-    fnStatus.className = 'fn-status';
+    const toggleState = document.createElement('span');
+    toggleState.className = 'fn-toggle-state';
 
-    const pill = document.createElement('span');
-    pill.className = `status-pill ${error ? 'error' : fn.on ? 'active' : 'inactive'}`;
+    if (error) {
+      toggleBtn.disabled = true;
+      toggleState.textContent = 'ERR';
+    } else if (fn.on) {
+      toggleState.innerHTML = '<span class="fn-toggle-dot"></span>LIVE';
+      toggleBtn.onclick = async () => {
+        toggleBtn.disabled = true;
+        toggleBtn.classList.add('pending');
+        toggleState.textContent = 'Stopping…';
+        await callVmix(room.key, fn.stopFn);
+        setTimeout(() => refreshStatus(room.key), 1000);
+      };
+    } else {
+      toggleState.textContent = 'OFF';
+      toggleBtn.onclick = async () => {
+        toggleBtn.disabled = true;
+        toggleBtn.classList.add('pending');
+        toggleState.textContent = 'Starting…';
+        await callVmix(room.key, fn.startFn);
+        setTimeout(() => refreshStatus(room.key), 1000);
+      };
+    }
 
-    const pillText = document.createElement('span');
-    pillText.textContent = error ? 'ERR' : fn.on ? 'LIVE' : 'OFF';
-
-    fnStatus.appendChild(pill);
-    fnStatus.appendChild(pillText);
-
-    fnHeader.appendChild(fnLabel);
-    fnHeader.appendChild(fnStatus);
-
-    const fnButtons = document.createElement('div');
-    fnButtons.className = 'fn-buttons';
-
-    const startBtn = document.createElement('button');
-    startBtn.className = 'btn-start';
-    startBtn.textContent = '▶';
-    startBtn.title = 'Start ' + fn.label;
-    startBtn.onclick = async () => {
-      startBtn.disabled = true;
-      startBtn.textContent = '…';
-      await callVmix(room.key, fn.startFn);
-      setTimeout(() => refreshStatus(room.key), 1000);
-    };
-
-    const stopBtn = document.createElement('button');
-    stopBtn.className = 'btn-stop';
-    stopBtn.textContent = '■';
-    stopBtn.title = 'Stop ' + fn.label;
-    stopBtn.onclick = async () => {
-      stopBtn.disabled = true;
-      stopBtn.textContent = '…';
-      await callVmix(room.key, fn.stopFn);
-      setTimeout(() => refreshStatus(room.key), 1000);
-    };
-
-    fnButtons.appendChild(startBtn);
-    fnButtons.appendChild(stopBtn);
-
-    fnControl.appendChild(fnHeader);
-    fnControl.appendChild(fnButtons);
-
+    toggleBtn.appendChild(toggleLabel);
+    toggleBtn.appendChild(toggleState);
+    fnControl.appendChild(toggleBtn);
     controls.appendChild(fnControl);
   });
 
@@ -654,88 +735,35 @@ function createRoomCard(room) {
   masterControls.className = 'master-controls';
 
   const startAllBtn = document.createElement('button');
-  startAllBtn.className = 'btn-start-all';
-  startAllBtn.textContent = '▶  START ALL';
+  startAllBtn.className = 'btn btn-start-all';
+  startAllBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="2,0 12,6 2,12"/></svg><span>START ALL</span>';
   startAllBtn.onclick = () => roomAction(room.key, 'start');
 
   const stopAllBtn = document.createElement('button');
-  stopAllBtn.className = 'btn-stop-all';
-  stopAllBtn.textContent = '■  STOP ALL';
+  stopAllBtn.className = 'btn btn-stop-all';
+  stopAllBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="0" y="0" width="10" height="10" rx="1.5"/></svg><span>STOP ALL</span>';
   stopAllBtn.onclick = () => roomAction(room.key, 'stop');
 
   masterControls.appendChild(startAllBtn);
   masterControls.appendChild(stopAllBtn);
 
   card.appendChild(header);
-  card.appendChild(ipRow);
   card.appendChild(controls);
   card.appendChild(masterControls);
 
   return card;
 }
 
-// Toggle IP row visibility
-function toggleIpRow(roomKey) {
-  const ipRow = document.getElementById(`ip-row-${roomKey}`);
-  ipRow.style.display = ipRow.style.display === 'none' ? 'flex' : 'none';
-}
-
-// Save IP address
-function saveIp(roomKey, ip) {
-  const profile = getCurrentProfile();
-  const room = profile.rooms.find(r => r.key === roomKey);
-  if (!room) return;
-
-  room.ip = ip.trim();
-  saveProfiles();
-  toggleIpRow(roomKey);
-  showToast('IP saved');
-  refreshStatus(roomKey);
-}
-
-// Edit room name inline
-function editRoomNameInline(roomKey, nameElement) {
-  const profile = getCurrentProfile();
-  const room = profile.rooms.find(r => r.key === roomKey);
-  if (!room) return;
-
-  const originalText = nameElement.textContent;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'room-name-edit-input';
-  input.value = originalText;
-
-  // Replace text with input
-  nameElement.textContent = '';
-  nameElement.appendChild(input);
-  input.focus();
-  input.select();
-
-  const save = () => {
-    const newName = input.value.trim();
-    if (newName && newName !== originalText) {
-      room.name = newName;
-      saveProfiles();
-      renderRooms();
-    } else {
-      nameElement.textContent = originalText;
-    }
-  };
-
-  const cancel = () => {
-    nameElement.textContent = originalText;
-  };
-
-  input.onblur = save;
-  input.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      save();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      cancel();
-    }
-  };
+// Open settings page scrolled to a specific room
+function openRoomSettings(roomKey) {
+  switchPage('settings');
+  renderSettings();
+  const target = document.querySelector(`.settings-room-item[data-room-key="${roomKey}"]`);
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('highlight');
+    setTimeout(() => target.classList.remove('highlight'), 1500);
+  }
 }
 
 // Reorder rooms via drag and drop
@@ -822,6 +850,43 @@ async function refreshStatus(roomKey) {
   const status = await window.vmix.status(room.ip);
   appState.vmixStatus[roomKey] = status;
 
+  // Update health tracking
+  const prev = appState.vmixHealth[roomKey] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  if (status.ok) {
+    appState.vmixHealth[roomKey] = {
+      latency: status.latency || 0,
+      lastSeen: Date.now(),
+      failures: 0,
+      tier: (status.latency || 0) > 1000 ? 'degraded' : 'healthy'
+    };
+    // Alert on recovery from unreachable
+    if (prev.tier === 'unreachable') {
+      showToast(`${room.name} is back online`);
+    }
+  } else {
+    const failures = prev.failures + 1;
+    const tier = failures >= 3 ? 'unreachable' : failures >= 1 ? 'degraded' : 'healthy';
+    appState.vmixHealth[roomKey] = {
+      latency: prev.latency,
+      lastSeen: prev.lastSeen,
+      failures,
+      tier
+    };
+    // Alert when crossing to unreachable
+    if (tier === 'unreachable' && prev.tier !== 'unreachable') {
+      showToast(`${room.name} is unreachable`);
+    }
+  }
+
+  // Track recording start time
+  if (status.ok && status.recording) {
+    if (!recordingStartTimes[roomKey]) {
+      recordingStartTimes[roomKey] = Date.now();
+    }
+  } else {
+    delete recordingStartTimes[roomKey];
+  }
+
   // Re-render just this card
   const oldCard = document.getElementById(`room-card-${roomKey}`);
   if (oldCard) {
@@ -859,7 +924,13 @@ function renderProfiles() {
   const list = document.getElementById('profiles-list');
   list.innerHTML = '';
 
-  Object.keys(appState.profiles).forEach(key => {
+  const profileKeys = Object.keys(appState.profiles);
+  if (profileKeys.length === 0) {
+    list.innerHTML = '<div class="empty-state">No profiles yet. Create one to get started.</div>';
+    return;
+  }
+
+  profileKeys.forEach(key => {
     const profile = appState.profiles[key];
     const item = document.createElement('div');
     item.className = 'profile-item' + (key === appState.current ? ' active' : '');
@@ -895,21 +966,21 @@ function renderProfiles() {
 
     if (key !== appState.current) {
       const switchBtn = document.createElement('button');
-      switchBtn.className = 'btn-switch';
+      switchBtn.className = 'btn btn-primary';
       switchBtn.textContent = 'Switch';
       switchBtn.onclick = () => switchProfile(key);
       actions.appendChild(switchBtn);
     }
 
     const copyBtn = document.createElement('button');
-    copyBtn.className = 'btn-copy';
+    copyBtn.className = 'btn btn-ghost';
     copyBtn.textContent = '📋';
     copyBtn.title = 'Copy profile';
     copyBtn.onclick = () => copyProfile(key);
     actions.appendChild(copyBtn);
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn-delete';
+    deleteBtn.className = 'btn btn-danger';
     deleteBtn.textContent = '✕';
     deleteBtn.title = 'Delete profile';
     deleteBtn.onclick = () => deleteProfile(key);
@@ -926,11 +997,15 @@ function renderProfiles() {
 function switchProfile(key) {
   appState.current = key;
   saveProfiles();
-  renderProfiles();
   updateProfileBadge();
-  if (appState.currentPage === 'rooms') {
-    renderRooms();
-  }
+
+  // Re-render current page with new conference data
+  if (appState.currentPage === 'rooms') renderRooms();
+  if (appState.currentPage === 'events') renderProfiles();
+  if (appState.currentPage === 'show') renderShowTimeline();
+  if (appState.currentPage === 'log') renderAuditLog();
+  if (appState.currentPage === 'settings') renderSettings();
+
   showToast('Switched to ' + appState.profiles[key].name);
 }
 
@@ -998,6 +1073,7 @@ function renderSettings() {
   profile.rooms.forEach((room, index) => {
     const item = document.createElement('div');
     item.className = 'settings-room-item';
+    item.dataset.roomKey = room.key;
 
     const nameInput = document.createElement('input');
     nameInput.type = 'text';
@@ -1020,7 +1096,7 @@ function renderSettings() {
     };
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn-delete-room';
+    deleteBtn.className = 'btn btn-danger btn-sm';
     deleteBtn.textContent = '✕';
     deleteBtn.title = 'Remove room';
     deleteBtn.onclick = () => {
@@ -1028,6 +1104,7 @@ function renderSettings() {
         showToast('Need at least one room');
         return;
       }
+      if (!confirm(`Remove room "${room.name}"?`)) return;
       profile.rooms.splice(index, 1);
       saveProfiles();
       renderSettings();
@@ -1085,6 +1162,23 @@ function hideModal() {
   document.getElementById('modal-overlay').style.display = 'none';
 }
 
+// Shared modal close behavior — ESC key + backdrop click
+function enableModalClose(modalEl, onClose) {
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      onClose();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+  modalEl.onclick = (e) => {
+    if (e.target === modalEl) {
+      onClose();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+}
+
 // Toast notifications
 function showToast(message) {
   const toast = document.getElementById('toast');
@@ -1110,21 +1204,13 @@ async function saveIdentity(identity) {
 }
 
 function updateIdentityBadge() {
-  if (!appState.identity) return;
-  const badge = document.getElementById('identity-badge');
-  const roleColors = {
-    Director: '#5dcc5d',
-    Operator: '#55aaff',
-    Observer: '#ffaa00'
-  };
-  badge.textContent = `${appState.identity.name} · ${appState.identity.role}`;
-  badge.style.borderColor = roleColors[appState.identity.role] || '#888';
-  badge.style.color = roleColors[appState.identity.role] || '#888';
+  // Identity is shown on Settings page, no longer in header
 }
 
 function showIdentityOnboarding() {
   const modal = document.getElementById('identity-modal');
   modal.style.display = 'flex';
+  enableModalClose(modal, () => { modal.style.display = 'none'; });
 
   // Populate room selector for Operator role
   const roleSelect = document.getElementById('identity-role');
@@ -1197,6 +1283,7 @@ function showChangeIdentityModal() {
   }
 
   modal.style.display = 'flex';
+  enableModalClose(modal, () => { modal.style.display = 'none'; });
 
   roleSelect.onchange = () => {
     if (roleSelect.value === 'Operator') {
@@ -1557,11 +1644,11 @@ function renderShowTimeline() {
       <div class="show-item-status">${item.status}</div>
       <div class="show-item-actions">
         ${!isObserver && item.status === 'Pending' ? `
-          <button class="btn-show-go" data-id="${item.id}">Go</button>
-          <button class="btn-show-skip" data-id="${item.id}">Skip</button>
+          <button class="btn btn-success btn-sm btn-show-go" data-id="${item.id}">Go</button>
+          <button class="btn btn-ghost btn-sm btn-show-skip" data-id="${item.id}">Skip</button>
         ` : ''}
         ${isDirector ? `
-          <button class="btn-show-edit" data-id="${item.id}">✏</button>
+          <button class="btn btn-ghost btn-sm btn-show-edit" data-id="${item.id}">✏</button>
         ` : ''}
       </div>
     `;
@@ -1685,6 +1772,7 @@ function showAddShowItemModal() {
   document.getElementById('show-item-delete').style.display = 'none';
 
   modal.style.display = 'flex';
+  enableModalClose(modal, () => { modal.style.display = 'none'; });
 
   document.getElementById('show-item-confirm').onclick = () => {
     const time = document.getElementById('show-item-time').value;
@@ -1747,6 +1835,7 @@ function editShowItem(itemId) {
   document.getElementById('show-item-delete').style.display = 'inline-block';
 
   modal.style.display = 'flex';
+  enableModalClose(modal, () => { modal.style.display = 'none'; });
 
   document.getElementById('show-item-confirm').onclick = () => {
     const time = document.getElementById('show-item-time').value;

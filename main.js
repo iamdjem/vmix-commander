@@ -7,7 +7,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 
 // ─── Proxy State ────────────────────────────────────────────────────────────
-const PROXY_PORT = 8080;
+const PROXY_PORT = 8097;
 let proxyState = { running: false, port: PROXY_PORT, localIp: '' };
 
 function getLocalIp() {
@@ -402,12 +402,14 @@ ipcMain.handle('profiles:save', (event, data) => {
 
 // vMix: Get status
 ipcMain.handle('vmix:status', async (event, ip) => {
+  const start = Date.now();
   const result = await vmixHttpRequest(ip, null);
+  const latency = Date.now() - start;
   if (!result.ok) {
-    return { ok: false, error: result.error, recording: false, streaming: false, multicorder: false };
+    return { ok: false, error: result.error, latency, recording: false, streaming: false, multicorder: false };
   }
   const status = parseVmixStatus(result.data);
-  return { ok: true, ...status };
+  return { ok: true, latency, ...status };
 });
 
 // vMix: Call function

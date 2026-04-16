@@ -7,64 +7,62 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Top Header Bar -->
+  <!-- Unified Header Bar -->
   <div id="top-header" class="top-header">
-    <div class="app-title">vMix Commander</div>
-    <div id="identity-badge" class="identity-badge"></div>
+    <div class="header-left">
+      <div id="header-page-title" class="header-title">Room Control</div>
+      <span class="header-version">v0.4.1</span>
+    </div>
+    <div class="header-right">
+      <div id="conference-switcher" class="conference-switcher">
+        <button id="conference-btn" class="conference-btn">
+          <span id="conference-name">Loading…</span>
+          <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor"><path d="M1 1l4 4 4-4"/></svg>
+        </button>
+        <div id="conference-dropdown" class="conference-dropdown">
+          <div id="conference-list" class="conference-list"></div>
+          <button id="conference-add" class="conference-dropdown-item conference-add-btn">+ New Conference</button>
+        </div>
+      </div>
+      <div id="proxy-status-inline" class="proxy-status-inline">
+        <span id="proxy-indicator" class="proxy-dot">●</span>
+        <span id="proxy-label">Proxy starting…</span>
+      </div>
+    </div>
   </div>
 
   <!-- Main Content Area -->
   <div id="app">
     <!-- Rooms Page -->
-    <div id="page-rooms" class="page active">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Room Control</div>
-          <div class="page-subtitle">vMix · Record + Stream + MultiCorder</div>
-        </div>
-        <div id="profile-name" class="profile-badge"></div>
-      </div>
+    <div id="page-rooms" class="page active" data-title="Room Control">
       <div id="rooms-container" class="rooms-grid"></div>
     </div>
 
     <!-- Events Page -->
-    <div id="page-events" class="page">
-      <div class="page-header">
-        <div class="page-title">Event Profiles</div>
-      </div>
+    <div id="page-events" class="page" data-title="Event Profiles">
       <div class="profiles-container">
         <div id="profiles-list"></div>
         <div class="profiles-actions">
-          <button id="btn-new-profile" class="btn-new">+ New Profile</button>
-          <button id="btn-export-profiles" class="btn-secondary">Export Profiles</button>
-          <button id="btn-import-profiles" class="btn-secondary">Import Profiles</button>
+          <button id="btn-new-profile" class="btn btn-ghost btn-new">+ New Profile</button>
+          <button id="btn-export-profiles" class="btn btn-ghost">Export Profiles</button>
+          <button id="btn-import-profiles" class="btn btn-ghost">Import Profiles</button>
         </div>
       </div>
     </div>
 
     <!-- Show Page (Run-of-Show Timeline) -->
-    <div id="page-show" class="page">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Run of Show</div>
-          <div class="page-subtitle">Timeline · Auto-trigger · Manual Go</div>
-        </div>
-        <button id="btn-add-show-item" class="btn-new">+ Add Item</button>
+    <div id="page-show" class="page" data-title="Run of Show">
+      <div class="page-toolbar">
+        <button id="btn-add-show-item" class="btn btn-ghost">+ Add Item</button>
       </div>
       <div id="show-timeline" class="show-timeline"></div>
     </div>
 
     <!-- Log Page (Audit Log) -->
-    <div id="page-log" class="page">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Audit Log</div>
-          <div class="page-subtitle">Action history · Export · Filter</div>
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <button id="btn-export-log" class="btn-secondary">Export CSV</button>
-          <button id="btn-clear-log" class="btn-secondary">Clear Log</button>
-        </div>
+    <div id="page-log" class="page" data-title="Audit Log">
+      <div class="page-toolbar">
+        <button id="btn-export-log" class="btn btn-ghost btn-sm">Export CSV</button>
+        <button id="btn-clear-log" class="btn btn-danger btn-sm">Clear Log</button>
       </div>
       <div class="log-filters">
         <input type="text" id="log-filter-room" class="log-filter-input" placeholder="Filter by room">
@@ -85,13 +83,9 @@
     </div>
 
     <!-- Tunnel Page -->
-    <div id="page-tunnel" class="page">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Crew Access</div>
-          <div class="page-subtitle">Cloudflare Tunnel · QR Code · Proxy Status</div>
-        </div>
-        <button id="btn-restart-tunnel" class="btn-secondary">↺ Restart Tunnel</button>
+    <div id="page-tunnel" class="page" data-title="Crew Access">
+      <div class="page-toolbar">
+        <button id="btn-restart-tunnel" class="btn btn-ghost btn-sm">Restart Tunnel</button>
       </div>
 
       <!-- Proxy status card -->
@@ -117,24 +111,21 @@
       <!-- QR code card -->
       <div class="tunnel-card tunnel-qr-card">
         <div class="tunnel-card-title">Crew Tracker QR Code</div>
-        <p style="color:var(--t2); font-size:13px; margin-bottom:16px;">Scan to open the tracker — proxy URL is pre-configured automatically.</p>
+        <p style="color:var(--t2); font-size:14px; margin-bottom:16px;">Scan to open the tracker — proxy URL is pre-configured automatically.</p>
         <div id="tpage-qr-container" class="tpage-qr-container">
-          <p style="color:var(--t3); font-size:13px;">Waiting for tunnel…</p>
+          <p style="color:var(--t3); font-size:14px;">Waiting for tunnel…</p>
         </div>
         <p id="tpage-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all;"></p>
       </div>
     </div>
 
     <!-- Settings Page -->
-    <div id="page-settings" class="page">
-      <div class="page-header">
-        <div class="page-title">Settings</div>
-      </div>
+    <div id="page-settings" class="page" data-title="Settings">
       <div class="settings-container">
         <div class="settings-section">
           <div class="settings-label">My Identity</div>
           <div id="identity-display" class="identity-display"></div>
-          <button id="btn-change-identity" class="btn-secondary">Change Identity</button>
+          <button id="btn-change-identity" class="btn btn-ghost">Change Identity</button>
         </div>
 
         <div class="settings-section">
@@ -152,13 +143,13 @@
         <div class="settings-section">
           <div class="settings-label">Event Profile Configuration</div>
           <div id="settings-profile-name" class="settings-info"></div>
-          <button id="btn-rename-profile" class="btn-secondary">Rename Profile</button>
+          <button id="btn-rename-profile" class="btn btn-ghost">Rename Profile</button>
         </div>
 
         <div class="settings-section">
           <div class="settings-label">Rooms</div>
           <div id="settings-rooms-list"></div>
-          <button id="btn-add-room" class="btn-secondary">+ Add Room</button>
+          <button id="btn-add-room" class="btn btn-ghost">+ Add Room</button>
         </div>
 
         <div class="settings-section">
@@ -168,15 +159,15 @@
             <span>Always on Top</span>
           </label>
         </div>
+
+        <div class="settings-section settings-about">
+          <div class="settings-label">About</div>
+          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander v0.4.1</div>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Thin proxy status bar (proxy only, one line) -->
-  <div id="proxy-status-bar" class="proxy-status-bar">
-    <span id="proxy-indicator" class="proxy-dot">●</span>
-    <span id="proxy-label">Proxy starting…</span>
-  </div>
 
   <!-- QR Modal -->
   <div id="qr-modal" class="modal-overlay" style="display:none">
@@ -186,7 +177,7 @@
         <button id="qr-modal-close" class="modal-close">✕</button>
       </div>
       <div class="modal-body" style="text-align:center; padding: 24px 16px;">
-        <p style="color:var(--t2); font-size:13px; margin-bottom:16px;">Crew members scan this to open the tracker with the proxy pre-configured.</p>
+        <p style="color:var(--t2); font-size:14px; margin-bottom:16px;">Crew members scan this to open the tracker with the proxy pre-configured.</p>
         <div id="qr-code-container"></div>
         <p id="qr-tunnel-url" style="color:var(--t3); font-size:11px; font-family:monospace; margin-top:12px; word-break:break-all;"></p>
       </div>
@@ -196,51 +187,64 @@
   <!-- Bottom Navigation -->
   <nav class="bottom-nav">
     <button class="nav-tab active" data-page="rooms">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M5 12H3M21 12h-2M12 5V3M12 21v-2M7.05 7.05 5.636 5.636M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414M18.364 5.636l-1.414 1.414"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7.5" height="7.5" rx="2"/>
+          <rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/>
+          <rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/>
+          <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>
+        </svg>
+      </div>
       <span>Rooms</span>
     </button>
     <button class="nav-tab" data-page="events">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="4" width="18" height="18" rx="2"/>
-        <line x1="16" y1="2" x2="16" y2="6"/>
-        <line x1="8" y1="2" x2="8" y2="6"/>
-        <line x1="3" y1="10" x2="21" y2="10"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="17" rx="2"/>
+          <path d="M3 10h18"/>
+          <path d="M8 2v4M16 2v4"/>
+        </svg>
+      </div>
       <span>Events</span>
     </button>
     <button class="nav-tab" data-page="show">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="5 3 19 12 5 21 5 3"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="6 3 20 12 6 21 6 3"/>
+        </svg>
+      </div>
       <span>Show</span>
     </button>
     <button class="nav-tab" data-page="log" id="nav-tab-log">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10 9 9 9 8 9"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16.5 14"/>
+        </svg>
+      </div>
       <span>Log</span>
     </button>
     <button class="nav-tab" data-page="tunnel">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="3" width="20" height="14" rx="2"/>
-        <path d="M8 21h8M12 17v4"/>
-        <path d="M7 8l3 3-3 3M13 11h4"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20V10"/>
+          <path d="M18 20V4"/>
+          <path d="M6 20v-4"/>
+        </svg>
+      </div>
       <span>Tunnel</span>
     </button>
     <button class="nav-tab" data-page="settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M12 1v6m0 6v10M1 12h6m6 0h10"/>
-        <circle cx="12" cy="12" r="10"/>
-      </svg>
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="6" x2="20" y2="6"/>
+          <line x1="4" y1="12" x2="20" y2="12"/>
+          <line x1="4" y1="18" x2="20" y2="18"/>
+          <circle cx="8" cy="6" r="2" fill="currentColor"/>
+          <circle cx="16" cy="12" r="2" fill="currentColor"/>
+          <circle cx="10" cy="18" r="2" fill="currentColor"/>
+        </svg>
+      </div>
       <span>Settings</span>
     </button>
   </nav>
@@ -256,8 +260,8 @@
         <input type="text" id="modal-input" class="modal-input" placeholder="Enter name">
       </div>
       <div class="modal-footer">
-        <button id="modal-cancel" class="btn-cancel">Cancel</button>
-        <button id="modal-confirm" class="btn-confirm">OK</button>
+        <button id="modal-cancel" class="btn btn-ghost btn-cancel">Cancel</button>
+        <button id="modal-confirm" class="btn btn-primary btn-confirm">OK</button>
       </div>
     </div>
   </div>
@@ -270,21 +274,21 @@
       </div>
       <div class="modal-body">
         <p style="color: var(--t2); margin-bottom: 16px;">Please set your identity to continue.</p>
-        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Your Name</label>
+        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 14px;">Your Name</label>
         <input type="text" id="identity-name" class="modal-input" placeholder="e.g. Alex">
-        <label style="display: block; margin: 16px 0 8px; color: var(--t2); font-size: 13px;">Role</label>
+        <label style="display: block; margin: 16px 0 8px; color: var(--t2); font-size: 14px;">Role</label>
         <select id="identity-role" class="modal-select">
           <option value="Director">Director (full access)</option>
           <option value="Operator">Operator (single room)</option>
           <option value="Observer">Observer (view only)</option>
         </select>
         <div id="identity-room-selector" style="display: none; margin-top: 16px;">
-          <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Assigned Room</label>
+          <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 14px;">Assigned Room</label>
           <select id="identity-assigned-room" class="modal-select"></select>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="identity-save" class="btn-confirm">Save Identity</button>
+        <button id="identity-save" class="btn btn-primary btn-confirm">Save Identity</button>
       </div>
     </div>
   </div>
@@ -297,15 +301,15 @@
         <button id="show-item-modal-close" class="modal-close">✕</button>
       </div>
       <div class="modal-body">
-        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 13px;">Time (HH:MM)</label>
+        <label style="display: block; margin-bottom: 8px; color: var(--t2); font-size: 14px;">Time (HH:MM)</label>
         <input type="time" id="show-item-time" class="modal-input">
-        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Title</label>
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 14px;">Title</label>
         <input type="text" id="show-item-title" class="modal-input" placeholder="Session name">
-        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Room</label>
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 14px;">Room</label>
         <select id="show-item-room" class="modal-select">
           <option value="All Rooms">All Rooms</option>
         </select>
-        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 13px;">Action</label>
+        <label style="display: block; margin: 12px 0 8px; color: var(--t2); font-size: 14px;">Action</label>
         <select id="show-item-action" class="modal-select">
           <option value="Start Recording">Start Recording</option>
           <option value="Stop Recording">Stop Recording</option>
@@ -322,9 +326,9 @@
         </label>
       </div>
       <div class="modal-footer">
-        <button id="show-item-cancel" class="btn-cancel">Cancel</button>
+        <button id="show-item-cancel" class="btn btn-ghost btn-cancel">Cancel</button>
         <button id="show-item-delete" class="btn-delete" style="display: none;">Delete</button>
-        <button id="show-item-confirm" class="btn-confirm">Save</button>
+        <button id="show-item-confirm" class="btn btn-primary btn-confirm">Save</button>
       </div>
     </div>
   </div>
