@@ -85,6 +85,7 @@ body {
   display: none;
   height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-3) var(--sp-5);
   padding-bottom: 80px; /* 72px nav + 8px buffer */
 }
@@ -820,9 +821,7 @@ body {
   left: 0;
   right: 0;
   height: 72px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  background: rgba(20, 20, 20, 0.96);
   border-top: 1px solid var(--glass-border);
   display: flex;
   justify-content: space-around;
