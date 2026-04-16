@@ -15,7 +15,24 @@ let appState = {
 let statusRefreshInterval = null;
 let showAutoTriggerInterval = null;
 let recordingTimerInterval = null;
-const recordingStartTimes = {};  // { roomKey: timestamp }
+// Recording start times — persisted to localStorage to survive app restart
+const recordingStartTimes = JSON.parse(localStorage.getItem('recordingStartTimes') || '{}');
+
+function persistRecordingTimes() {
+  localStorage.setItem('recordingStartTimes', JSON.stringify(recordingStartTimes));
+}
+
+// Shared icon markup — sourced from <template> blocks in index.html
+const ICONS = {
+  get gear() { const tpl = document.getElementById('icon-gear'); return tpl ? tpl.innerHTML.trim() : ''; },
+  get play() { const tpl = document.getElementById('icon-play'); return tpl ? tpl.innerHTML.trim() : ''; },
+  get stop() { const tpl = document.getElementById('icon-stop'); return tpl ? tpl.innerHTML.trim() : ''; }
+};
+
+// Scope keys by profile to prevent cross-conference collision
+function scopedKey(roomKey) {
+  return `${appState.current}:${roomKey}`;
+}
 
 // Format ms duration as H:MM:SS or MM:SS
 function formatDuration(ms) {
@@ -31,7 +48,10 @@ function formatDuration(ms) {
 function startRecordingTimers() {
   if (recordingTimerInterval) return;
   recordingTimerInterval = setInterval(() => {
-    for (const [roomKey, startTime] of Object.entries(recordingStartTimes)) {
+    const prefix = appState.current + ':';
+    for (const [key, startTime] of Object.entries(recordingStartTimes)) {
+      if (!key.startsWith(prefix)) continue;
+      const roomKey = key.slice(prefix.length);
       const el = document.getElementById(`rec-timer-${roomKey}`);
       if (el) {
         el.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - startTime)}`;
@@ -39,6 +59,10 @@ function startRecordingTimers() {
       }
     }
   }, 1000);
+}
+
+function stopRecordingTimers() {
+  if (recordingTimerInterval) { clearInterval(recordingTimerInterval); recordingTimerInterval = null; }
 }
 let firebaseDb = null;
 let firebaseRef = null;
@@ -161,8 +185,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // QR modal close (legacy modal kept for possible future use)
   const closeBtn = document.getElementById('qr-modal-close');
   const modal    = document.getElementById('qr-modal');
-  if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-  if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+  if (closeBtn) closeBtn.addEventListener('click', () => { closeModalOverlay(modal); });
+  if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeModalOverlay(modal); });
 });
 // ─── End Tunnel Status ────────────────────────────────────────────────────────
 
@@ -235,59 +259,30 @@ function getCurrentProfile() {
   return appState.profiles[appState.current] || { name: 'Unknown', rooms: [] };
 }
 
-// Conference switcher
+// Conference tabs
 function updateProfileBadge() {
-  const profile = getCurrentProfile();
-  const nameEl = document.getElementById('conference-name');
-  if (nameEl) nameEl.textContent = profile.name;
-  renderConferenceDropdown();
+  renderConferenceTabs();
 }
 
-function renderConferenceDropdown() {
-  const list = document.getElementById('conference-list');
+function renderConferenceTabs() {
+  const list = document.getElementById('conference-tab-list');
   if (!list) return;
   list.innerHTML = '';
 
   Object.keys(appState.profiles).forEach(key => {
     const profile = appState.profiles[key];
-    const item = document.createElement('button');
-    item.className = 'conference-dropdown-item' + (key === appState.current ? ' active' : '');
-    item.textContent = profile.name;
-    item.onclick = (e) => {
-      e.stopPropagation();
-      closeConferenceDropdown();
+    const tab = document.createElement('button');
+    tab.className = 'conference-tab' + (key === appState.current ? ' active' : '');
+    tab.textContent = profile.name;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', key === appState.current ? 'true' : 'false');
+    tab.onclick = () => {
       if (key !== appState.current) {
         switchProfile(key);
       }
     };
-    list.appendChild(item);
+    list.appendChild(tab);
   });
-}
-
-function toggleConferenceDropdown() {
-  const dropdown = document.getElementById('conference-dropdown');
-  dropdown.classList.toggle('open');
-  if (dropdown.classList.contains('open')) {
-    renderConferenceDropdown();
-    // Close on outside click
-    setTimeout(() => {
-      document.addEventListener('click', closeConferenceDropdownOnOutside, { once: true });
-    }, 0);
-  }
-}
-
-function closeConferenceDropdown() {
-  document.getElementById('conference-dropdown').classList.remove('open');
-}
-
-function closeConferenceDropdownOnOutside(e) {
-  const switcher = document.getElementById('conference-switcher');
-  if (!switcher.contains(e.target)) {
-    closeConferenceDropdown();
-  } else {
-    // Re-attach if click was inside
-    document.addEventListener('click', closeConferenceDropdownOnOutside, { once: true });
-  }
 }
 
 // Navigation
@@ -315,15 +310,20 @@ function switchPage(page) {
   }
 
   // Update nav tabs
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => {
+    t.classList.remove('active');
+    t.removeAttribute('aria-current');
+  });
   const targetTab = document.querySelector(`.nav-tab[data-page="${page}"]`);
-  if (targetTab) targetTab.classList.add('active');
+  if (targetTab) {
+    targetTab.classList.add('active');
+    targetTab.setAttribute('aria-current', 'page');
+  }
 
   // Page-specific actions
   if (page === 'rooms') {
     renderRooms();
     startStatusRefresh();
-    startRecordingTimers();
   } else {
     stopStatusRefresh();
   }
@@ -398,39 +398,51 @@ function setupEventListeners() {
   });
 
   // Export profiles button
-  document.getElementById('btn-export-profiles').addEventListener('click', async () => {
-    const result = await window.dialog.saveJson(appState.profiles);
-    if (result.ok) {
-      showToast('Profiles exported');
-    } else if (!result.canceled) {
-      showToast('Export failed: ' + result.error);
+  document.getElementById('btn-export-profiles').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    setButtonLoading(btn, true, 'Exporting…');
+    try {
+      const result = await window.dialog.saveJson(appState.profiles);
+      if (result.ok) {
+        showToast('Profiles exported');
+      } else if (!result.canceled) {
+        showToast('Export failed: ' + result.error);
+      }
+    } finally {
+      setButtonLoading(btn, false);
     }
   });
 
   // Import profiles button
-  document.getElementById('btn-import-profiles').addEventListener('click', async () => {
-    const result = await window.dialog.openJson();
-    if (result.ok) {
-      const imported = result.data;
-      let count = 0;
+  document.getElementById('btn-import-profiles').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    setButtonLoading(btn, true, 'Importing…');
+    try {
+      const result = await window.dialog.openJson();
+      if (result.ok) {
+        const imported = result.data;
+        let count = 0;
 
-      // Merge profiles (skip duplicates by key)
-      Object.keys(imported).forEach(key => {
-        if (!appState.profiles[key]) {
-          appState.profiles[key] = imported[key];
-          count++;
+        // Merge profiles (skip duplicates by key)
+        Object.keys(imported).forEach(key => {
+          if (!appState.profiles[key]) {
+            appState.profiles[key] = imported[key];
+            count++;
+          }
+        });
+
+        if (count > 0) {
+          await saveProfiles();
+          renderProfiles();
+          showToast(`Imported ${count} profile${count === 1 ? '' : 's'}`);
+        } else {
+          showToast('No new profiles to import');
         }
-      });
-
-      if (count > 0) {
-        await saveProfiles();
-        renderProfiles();
-        showToast(`Imported ${count} profile${count === 1 ? '' : 's'}`);
-      } else {
-        showToast('No new profiles to import');
+      } else if (!result.canceled) {
+        showToast('Import failed: ' + result.error);
       }
-    } else if (!result.canceled) {
-      showToast('Import failed: ' + result.error);
+    } finally {
+      setButtonLoading(btn, false);
     }
   });
 
@@ -506,15 +518,8 @@ function setupEventListeners() {
     showAddShowItemModal();
   });
 
-  // Conference switcher
-  document.getElementById('conference-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleConferenceDropdown();
-  });
-
-  document.getElementById('conference-add').addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeConferenceDropdown();
+  // Conference tabs
+  document.getElementById('conference-add').addEventListener('click', () => {
     showModal('New Conference', '', (name) => {
       if (!name) return;
       const key = 'profile_' + Date.now();
@@ -572,7 +577,7 @@ function createRoomCard(room) {
   card.draggable = true;
   card.dataset.roomKey = room.key;
 
-  const status = appState.vmixStatus[room.key] || { ok: false, recording: false, streaming: false, multicorder: false };
+  const status = appState.vmixStatus[scopedKey(room.key)] || { ok: false, recording: false, streaming: false, multicorder: false };
   const connected = room.ip && status.ok;
   const error = room.ip && !status.ok;
 
@@ -627,15 +632,17 @@ function createRoomCard(room) {
   name.title = room.name;
 
   // Health info
-  const health = appState.vmixHealth[room.key] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const health = appState.vmixHealth[scopedKey(room.key)] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
   const healthEl = document.createElement('div');
   healthEl.className = `room-health ${health.tier}`;
+  healthEl.id = 'room-health-' + room.key;
 
   const healthDot = document.createElement('span');
   healthDot.className = 'room-health-dot';
 
   const healthLabel = document.createElement('span');
   healthLabel.className = 'room-health-label';
+  healthLabel.id = 'room-health-label-' + room.key;
 
   if (!room.ip) {
     healthEl.className = 'room-health offline';
@@ -658,9 +665,9 @@ function createRoomCard(room) {
   const timerEl = document.createElement('div');
   timerEl.className = 'room-rec-timer';
   timerEl.id = `rec-timer-${room.key}`;
-  if (recordingStartTimes[room.key]) {
+  if (recordingStartTimes[scopedKey(room.key)]) {
     timerEl.classList.add('active');
-    timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[room.key])}`;
+    timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[scopedKey(room.key)])}`;
   }
 
   nameWrap.appendChild(name);
@@ -669,7 +676,7 @@ function createRoomCard(room) {
 
   const settingsBtn = document.createElement('button');
   settingsBtn.className = 'room-settings-btn';
-  settingsBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  settingsBtn.innerHTML = ICONS.gear;
   settingsBtn.title = 'Room settings';
   settingsBtn.onclick = () => openRoomSettings(room.key);
 
@@ -693,6 +700,9 @@ function createRoomCard(room) {
 
     const toggleBtn = document.createElement('button');
     toggleBtn.className = `fn-toggle ${error ? 'error' : fn.on ? 'active' : 'inactive'}`;
+    toggleBtn.id = 'fn-' + room.key + '-' + fn.label;
+    toggleBtn.dataset.fnLabel = fn.label;
+    toggleBtn.dataset.roomKey = room.key;
 
     const toggleLabel = document.createElement('span');
     toggleLabel.className = 'fn-toggle-label';
@@ -700,6 +710,7 @@ function createRoomCard(room) {
 
     const toggleState = document.createElement('span');
     toggleState.className = 'fn-toggle-state';
+    toggleState.id = 'fn-state-' + room.key + '-' + fn.label;
 
     if (error) {
       toggleBtn.disabled = true;
@@ -736,12 +747,12 @@ function createRoomCard(room) {
 
   const startAllBtn = document.createElement('button');
   startAllBtn.className = 'btn btn-start-all';
-  startAllBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="2,0 12,6 2,12"/></svg><span>START ALL</span>';
+  startAllBtn.innerHTML = ICONS.play + '<span>START ALL</span>';
   startAllBtn.onclick = () => roomAction(room.key, 'start');
 
   const stopAllBtn = document.createElement('button');
   stopAllBtn.className = 'btn btn-stop-all';
-  stopAllBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="0" y="0" width="10" height="10" rx="1.5"/></svg><span>STOP ALL</span>';
+  stopAllBtn.innerHTML = ICONS.stop + '<span>STOP ALL</span>';
   stopAllBtn.onclick = () => roomAction(room.key, 'stop');
 
   masterControls.appendChild(startAllBtn);
@@ -788,10 +799,16 @@ async function callVmix(roomKey, functionName) {
   const room = profile.rooms.find(r => r.key === roomKey);
   if (!room || !room.ip) {
     showToast('No IP set for ' + room.name);
-    return;
+    return { ok: false, error: 'no ip' };
   }
 
-  const result = await window.vmix.call(room.ip, functionName);
+  let result;
+  try {
+    result = await window.vmix.call(room.ip, functionName);
+  } catch (err) {
+    console.error('vMix call failed:', err);
+    result = { ok: false, error: err.message || 'Network error' };
+  }
 
   // Log to audit
   let actionName = functionName;
@@ -809,6 +826,8 @@ async function callVmix(roomKey, functionName) {
   } else {
     showToast('✗ Failed: ' + (result.error || 'unknown'));
   }
+
+  return result;
 }
 
 // Room action (start/stop all)
@@ -826,9 +845,16 @@ async function roomAction(roomKey, action) {
     ? ['StartRecording', 'StartStreaming', 'StartMultiCorder']
     : ['StopRecording', 'StopStreaming', 'StopMultiCorder'];
 
-  const results = await Promise.all(
-    functions.map(fn => window.vmix.call(room.ip, fn))
-  );
+  let results;
+  try {
+    results = await Promise.all(
+      functions.map(fn => window.vmix.call(room.ip, fn).catch(err => ({ ok: false, error: err.message })))
+    );
+  } catch (err) {
+    console.error('Room action failed:', err);
+    showToast('✗ Room action failed');
+    return;
+  }
 
   // Log to audit
   const actionName = action === 'start' ? 'START ALL' : 'STOP ALL';
@@ -847,52 +873,143 @@ async function refreshStatus(roomKey) {
   const room = profile.rooms.find(r => r.key === roomKey);
   if (!room) return;
 
-  const status = await window.vmix.status(room.ip);
-  appState.vmixStatus[roomKey] = status;
+  let status;
+  try {
+    status = await window.vmix.status(room.ip);
+  } catch (err) {
+    console.error('vMix status failed:', err);
+    status = { ok: false, error: err.message || 'Network error' };
+  }
+  const sk = scopedKey(roomKey);
+  appState.vmixStatus[sk] = status;
 
   // Update health tracking
-  const prev = appState.vmixHealth[roomKey] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const prev = appState.vmixHealth[sk] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
   if (status.ok) {
-    appState.vmixHealth[roomKey] = {
+    appState.vmixHealth[sk] = {
       latency: status.latency || 0,
       lastSeen: Date.now(),
       failures: 0,
       tier: (status.latency || 0) > 1000 ? 'degraded' : 'healthy'
     };
-    // Alert on recovery from unreachable
     if (prev.tier === 'unreachable') {
       showToast(`${room.name} is back online`);
     }
   } else {
     const failures = prev.failures + 1;
     const tier = failures >= 3 ? 'unreachable' : failures >= 1 ? 'degraded' : 'healthy';
-    appState.vmixHealth[roomKey] = {
+    appState.vmixHealth[sk] = {
       latency: prev.latency,
       lastSeen: prev.lastSeen,
       failures,
       tier
     };
-    // Alert when crossing to unreachable
     if (tier === 'unreachable' && prev.tier !== 'unreachable') {
       showToast(`${room.name} is unreachable`);
     }
   }
 
-  // Track recording start time
+  // Track recording start time (persisted to localStorage)
   if (status.ok && status.recording) {
-    if (!recordingStartTimes[roomKey]) {
-      recordingStartTimes[roomKey] = Date.now();
+    if (!recordingStartTimes[sk]) {
+      recordingStartTimes[sk] = Date.now();
+      persistRecordingTimes();
     }
-  } else {
-    delete recordingStartTimes[roomKey];
+  } else if (recordingStartTimes[sk]) {
+    delete recordingStartTimes[sk];
+    persistRecordingTimes();
   }
 
-  // Re-render just this card
-  const oldCard = document.getElementById(`room-card-${roomKey}`);
-  if (oldCard) {
-    const newCard = createRoomCard(room);
-    oldCard.replaceWith(newCard);
+  updateRoomCard(roomKey);
+}
+
+// Targeted DOM updates — avoids full card replacement, preserves focus/animations
+function updateRoomCard(roomKey) {
+  const profile = getCurrentProfile();
+  const room = profile.rooms.find(r => r.key === roomKey);
+  if (!room) return;
+
+  const card = document.getElementById('room-card-' + roomKey);
+  if (!card) return;
+
+  const status = appState.vmixStatus[scopedKey(roomKey)] || { ok: false, recording: false, streaming: false, multicorder: false };
+  const health = appState.vmixHealth[scopedKey(roomKey)] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const error = room.ip && !status.ok;
+
+  const healthEl = document.getElementById('room-health-' + roomKey);
+  const healthLabel = document.getElementById('room-health-label-' + roomKey);
+  if (healthEl && healthLabel) {
+    if (!room.ip) {
+      healthEl.className = 'room-health offline';
+      healthLabel.textContent = 'No IP';
+    } else {
+      healthEl.className = 'room-health ' + health.tier;
+      if (health.tier === 'healthy') {
+        healthLabel.textContent = `Ping ${health.latency}ms`;
+      } else if (health.tier === 'degraded') {
+        healthLabel.textContent = health.failures > 0 ? 'Reconnecting…' : `Ping ${health.latency}ms`;
+      } else if (health.tier === 'unreachable') {
+        const ago = health.lastSeen ? Math.round((Date.now() - health.lastSeen) / 1000) : 0;
+        healthLabel.textContent = ago > 0 ? `Offline ${ago}s` : 'Offline';
+      } else {
+        healthLabel.textContent = 'Connecting…';
+      }
+    }
   }
+
+  const timerEl = document.getElementById('rec-timer-' + roomKey);
+  if (timerEl) {
+    const sk = scopedKey(roomKey);
+    if (recordingStartTimes[sk]) {
+      timerEl.classList.add('active');
+      timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[sk])}`;
+    } else {
+      timerEl.classList.remove('active');
+      timerEl.innerHTML = '';
+    }
+  }
+
+  const fnMap = [
+    { label: 'Record', startFn: 'StartRecording', stopFn: 'StopRecording', on: status.recording },
+    { label: 'Stream', startFn: 'StartStreaming', stopFn: 'StopStreaming', on: status.streaming },
+    { label: 'MultiCorder', startFn: 'StartMultiCorder', stopFn: 'StopMultiCorder', on: status.multicorder }
+  ];
+
+  fnMap.forEach(fn => {
+    const btn = document.getElementById('fn-' + roomKey + '-' + fn.label);
+    const stateEl = document.getElementById('fn-state-' + roomKey + '-' + fn.label);
+    if (!btn || !stateEl) return;
+
+    btn.classList.remove('pending');
+    btn.disabled = false;
+
+    if (error) {
+      btn.className = 'fn-toggle error';
+      btn.disabled = true;
+      stateEl.textContent = 'ERR';
+      btn.onclick = null;
+    } else if (fn.on) {
+      btn.className = 'fn-toggle active';
+      stateEl.innerHTML = '<span class="fn-toggle-dot"></span>LIVE';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.classList.add('pending');
+        stateEl.textContent = 'Stopping…';
+        await callVmix(room.key, fn.stopFn);
+        setTimeout(() => refreshStatus(room.key), 1000);
+      };
+    } else {
+      btn.className = 'fn-toggle inactive';
+      stateEl.textContent = 'OFF';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.classList.add('pending');
+        stateEl.textContent = 'Starting…';
+        await callVmix(room.key, fn.startFn);
+        setTimeout(() => refreshStatus(room.key), 1000);
+      };
+    }
+  });
 }
 
 // Refresh status for all rooms
@@ -904,6 +1021,7 @@ async function refreshAllStatus() {
 // Start auto-refresh
 function startStatusRefresh() {
   stopStatusRefresh();
+  startRecordingTimers();
   statusRefreshInterval = setInterval(() => {
     if (appState.currentPage === 'rooms') {
       refreshAllStatus();
@@ -917,6 +1035,7 @@ function stopStatusRefresh() {
     clearInterval(statusRefreshInterval);
     statusRefreshInterval = null;
   }
+  stopRecordingTimers();
 }
 
 // Render profiles page
@@ -1001,10 +1120,10 @@ function switchProfile(key) {
 
   // Re-render current page with new conference data
   if (appState.currentPage === 'rooms') renderRooms();
-  if (appState.currentPage === 'events') renderProfiles();
-  if (appState.currentPage === 'show') renderShowTimeline();
-  if (appState.currentPage === 'log') renderAuditLog();
-  if (appState.currentPage === 'settings') renderSettings();
+  else if (appState.currentPage === 'events') renderProfiles();
+  else if (appState.currentPage === 'show') renderShowTimeline();
+  else if (appState.currentPage === 'log') renderAuditLog();
+  else if (appState.currentPage === 'settings') renderSettings();
 
   showToast('Switched to ' + appState.profiles[key].name);
 }
@@ -1046,19 +1165,22 @@ function deleteProfile(key) {
   }
 
   const profile = appState.profiles[key];
-  if (!confirm(`Delete profile "${profile.name}"?`)) return;
+  showConfirm({
+    message: `Delete profile "${profile.name}"?`,
+    onConfirm: () => {
+      delete appState.profiles[key];
 
-  delete appState.profiles[key];
+      // Switch to another profile if deleting current
+      if (appState.current === key) {
+        appState.current = Object.keys(appState.profiles)[0];
+      }
 
-  // Switch to another profile if deleting current
-  if (appState.current === key) {
-    appState.current = Object.keys(appState.profiles)[0];
-  }
-
-  saveProfiles();
-  renderProfiles();
-  updateProfileBadge();
-  showToast('Profile deleted');
+      saveProfiles();
+      renderProfiles();
+      updateProfileBadge();
+      showToast('Profile deleted');
+    }
+  });
 }
 
 // Render settings page
@@ -1104,12 +1226,16 @@ function renderSettings() {
         showToast('Need at least one room');
         return;
       }
-      if (!confirm(`Remove room "${room.name}"?`)) return;
-      profile.rooms.splice(index, 1);
-      saveProfiles();
-      renderSettings();
-      if (appState.currentPage === 'rooms') renderRooms();
-      showToast('Room removed');
+      showConfirm({
+        message: `Remove room "${room.name}"?`,
+        onConfirm: () => {
+          profile.rooms.splice(index, 1);
+          saveProfiles();
+          renderSettings();
+          if (appState.currentPage === 'rooms') renderRooms();
+          showToast('Room removed');
+        }
+      });
     };
 
     item.appendChild(nameInput);
@@ -1128,55 +1254,100 @@ function showModal(title, initialValue, onConfirm) {
 
   titleEl.textContent = title;
   input.value = initialValue;
-  overlay.style.display = 'flex';
+  openModalOverlay(overlay);
   input.focus();
   input.select();
 
-  const confirm = () => {
+  const confirmFn = () => {
     const value = input.value.trim();
     if (value) {
       onConfirm(value);
       hideModal();
     }
   };
+  const cancel = () => hideModal();
 
-  const cancel = () => {
-    hideModal();
-  };
-
-  document.getElementById('modal-confirm').onclick = confirm;
+  document.getElementById('modal-confirm').onclick = confirmFn;
   document.getElementById('modal-cancel').onclick = cancel;
   document.getElementById('modal-close').onclick = cancel;
 
   input.onkeydown = (e) => {
-    if (e.key === 'Enter') confirm();
+    if (e.key === 'Enter') confirmFn();
     if (e.key === 'Escape') cancel();
   };
 
-  overlay.onclick = (e) => {
-    if (e.target === overlay) cancel();
-  };
+  bindOverlayDismiss(overlay, cancel);
 }
 
-function hideModal() {
-  document.getElementById('modal-overlay').style.display = 'none';
-}
+function hideModal() { closeModalOverlay(document.getElementById('modal-overlay')); }
 
 // Shared modal close behavior — ESC key + backdrop click
 function enableModalClose(modalEl, onClose) {
-  const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      onClose();
-      document.removeEventListener('keydown', escHandler);
-    }
-  };
+  bindOverlayDismiss(modalEl, onClose);
+}
+
+// ─── Modal manager — prevents listener leaks and enforces body lock ─────────
+const _modalEscHandlers = new WeakMap();
+
+function openModalOverlay(overlayEl) {
+  overlayEl.classList.add('is-open');
+  overlayEl.style.display = 'flex';
+  document.body.classList.add('modal-open');
+}
+
+function closeModalOverlay(overlayEl) {
+  overlayEl.classList.remove('is-open');
+  overlayEl.style.display = 'none';
+  const handler = _modalEscHandlers.get(overlayEl);
+  if (handler) {
+    document.removeEventListener('keydown', handler);
+    _modalEscHandlers.delete(overlayEl);
+  }
+  const anyOpen = document.querySelector('.modal-overlay.is-open');
+  if (!anyOpen) document.body.classList.remove('modal-open');
+}
+
+function bindOverlayDismiss(overlayEl, onClose) {
+  const prev = _modalEscHandlers.get(overlayEl);
+  if (prev) document.removeEventListener('keydown', prev);
+  const escHandler = (e) => { if (e.key === 'Escape') onClose(); };
   document.addEventListener('keydown', escHandler);
-  modalEl.onclick = (e) => {
-    if (e.target === modalEl) {
-      onClose();
-      document.removeEventListener('keydown', escHandler);
-    }
+  _modalEscHandlers.set(overlayEl, escHandler);
+  overlayEl.onclick = (e) => { if (e.target === overlayEl) onClose(); };
+}
+
+// Custom confirmation dialog — replaces native confirm() for consistent UX
+function showConfirm({ title = 'Confirm', message, confirmLabel = 'Delete', cancelLabel = 'Cancel', danger = true, onConfirm }) {
+  const overlay = document.getElementById('modal-overlay');
+  const modal = overlay.querySelector('.modal');
+  const titleEl = document.getElementById('modal-title');
+  const body = modal.querySelector('.modal-body');
+  const footer = modal.querySelector('.modal-footer');
+
+  const originalBody = body.innerHTML;
+  const originalFooter = footer.innerHTML;
+
+  modal.classList.add('confirm-modal');
+  titleEl.textContent = title;
+  body.innerHTML = `<div>${message}</div>`;
+  footer.innerHTML = `
+    <button type="button" class="btn btn-ghost btn-cancel" id="confirm-cancel-btn">${cancelLabel}</button>
+    <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'} btn-confirm" id="confirm-ok-btn">${confirmLabel}</button>
+  `;
+
+  openModalOverlay(overlay);
+
+  const cleanup = () => {
+    closeModalOverlay(overlay);
+    modal.classList.remove('confirm-modal');
+    body.innerHTML = originalBody;
+    footer.innerHTML = originalFooter;
   };
+
+  document.getElementById('confirm-ok-btn').onclick = () => { cleanup(); onConfirm(); };
+  document.getElementById('confirm-cancel-btn').onclick = cleanup;
+  document.getElementById('modal-close').onclick = cleanup;
+  bindOverlayDismiss(overlay, cleanup);
 }
 
 // Toast notifications
@@ -1188,6 +1359,21 @@ function showToast(message) {
   setTimeout(() => {
     toast.classList.remove('show');
   }, 2500);
+}
+
+function setButtonLoading(btn, loading, label) {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.originalText = btn.dataset.originalText || btn.innerHTML;
+    btn.innerHTML = `<span class="spinner"></span>${label || 'Working…'}`;
+    btn.classList.add('is-loading');
+    btn.disabled = true;
+  } else {
+    if (btn.dataset.originalText) btn.innerHTML = btn.dataset.originalText;
+    btn.classList.remove('is-loading');
+    btn.disabled = false;
+    delete btn.dataset.originalText;
+  }
 }
 
 // ========================================
@@ -1209,8 +1395,8 @@ function updateIdentityBadge() {
 
 function showIdentityOnboarding() {
   const modal = document.getElementById('identity-modal');
-  modal.style.display = 'flex';
-  enableModalClose(modal, () => { modal.style.display = 'none'; });
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
 
   // Populate room selector for Operator role
   const roleSelect = document.getElementById('identity-role');
@@ -1245,7 +1431,7 @@ function showIdentityOnboarding() {
     }
 
     await saveIdentity(identity);
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
 
     // Now initialize the rest of the app
     await loadProfiles();
@@ -1282,8 +1468,8 @@ function showChangeIdentityModal() {
     ).join('');
   }
 
-  modal.style.display = 'flex';
-  enableModalClose(modal, () => { modal.style.display = 'none'; });
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
 
   roleSelect.onchange = () => {
     if (roleSelect.value === 'Operator') {
@@ -1312,7 +1498,7 @@ function showChangeIdentityModal() {
     }
 
     await saveIdentity(identity);
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
     updateIdentityBadge();
     updateIdentityDisplay();
     applyRoleRestrictions();
@@ -1393,9 +1579,10 @@ async function appendAuditLog(room, action, result) {
     ts: new Date().toISOString(),
     user: appState.identity.name,
     room: room,
-    ip: '', // IP could be added here if needed
+    ip: '',
     action: action,
-    result: result
+    result: result,
+    profileKey: appState.current
   };
 
   await window.audit.append(entry);
@@ -1406,8 +1593,8 @@ function renderAuditLog() {
   const container = document.getElementById('log-container');
   container.innerHTML = '';
 
-  // Apply filters
-  let filteredLog = [...appState.auditLog];
+  // Filter by current conference profile
+  let filteredLog = appState.auditLog.filter(e => !e.profileKey || e.profileKey === appState.current);
 
   if (appState.logFilters.room) {
     filteredLog = filteredLog.filter(e =>
@@ -1478,12 +1665,16 @@ async function exportAuditLogCsv() {
 }
 
 async function clearAuditLog() {
-  if (!confirm('Clear all audit log entries?')) return;
-
-  await window.audit.clear();
-  appState.auditLog = [];
-  renderAuditLog();
-  showToast('Log cleared');
+  showConfirm({
+    message: 'Clear all audit log entries?',
+    confirmLabel: 'Clear',
+    onConfirm: async () => {
+      await window.audit.clear();
+      appState.auditLog = [];
+      renderAuditLog();
+      showToast('Log cleared');
+    }
+  });
 }
 
 // ========================================
@@ -1511,8 +1702,12 @@ function loadFirebaseScripts() {
 }
 
 async function connectToFirebase() {
+  const syncCheckbox = document.getElementById('chk-sync-enabled');
+  if (syncCheckbox) syncCheckbox.disabled = true;
+
   if (!appState.eventCode) {
     updateSyncStatus('🔴 No event code', false);
+    if (syncCheckbox) syncCheckbox.disabled = false;
     return;
   }
 
@@ -1552,9 +1747,11 @@ async function connectToFirebase() {
     // Push current profiles to Firebase
     await firebaseRef.set(appState.profiles);
 
+    if (syncCheckbox) syncCheckbox.disabled = false;
   } catch (error) {
     console.error('Firebase connection error:', error);
     updateSyncStatus('🔴 Connection failed', false);
+    if (syncCheckbox) syncCheckbox.disabled = false;
   }
 }
 
@@ -1771,8 +1968,8 @@ function showAddShowItemModal() {
   document.getElementById('show-item-auto-run').checked = false;
   document.getElementById('show-item-delete').style.display = 'none';
 
-  modal.style.display = 'flex';
-  enableModalClose(modal, () => { modal.style.display = 'none'; });
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
 
   document.getElementById('show-item-confirm').onclick = () => {
     const time = document.getElementById('show-item-time').value;
@@ -1798,17 +1995,17 @@ function showAddShowItemModal() {
     });
 
     saveRunOfShow(runOfShow);
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
     renderShowTimeline();
     showToast('Item added');
   };
 
   document.getElementById('show-item-cancel').onclick = () => {
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
   };
 
   document.getElementById('show-item-modal-close').onclick = () => {
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
   };
 }
 
@@ -1834,8 +2031,8 @@ function editShowItem(itemId) {
   document.getElementById('show-item-auto-run').checked = item.autoRun;
   document.getElementById('show-item-delete').style.display = 'inline-block';
 
-  modal.style.display = 'flex';
-  enableModalClose(modal, () => { modal.style.display = 'none'; });
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
 
   document.getElementById('show-item-confirm').onclick = () => {
     const time = document.getElementById('show-item-time').value;
@@ -1856,30 +2053,33 @@ function editShowItem(itemId) {
     item.autoRun = autoRun;
 
     saveRunOfShow(runOfShow);
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
     renderShowTimeline();
     showToast('Item updated');
   };
 
   document.getElementById('show-item-delete').onclick = () => {
-    if (!confirm('Delete this timeline item?')) return;
-
-    const index = runOfShow.findIndex(i => i.id === itemId);
-    if (index !== -1) {
-      runOfShow.splice(index, 1);
-      saveRunOfShow(runOfShow);
-      modal.style.display = 'none';
-      renderShowTimeline();
-      showToast('Item deleted');
-    }
+    showConfirm({
+      message: 'Delete this timeline item?',
+      onConfirm: () => {
+        const index = runOfShow.findIndex(i => i.id === itemId);
+        if (index !== -1) {
+          runOfShow.splice(index, 1);
+          saveRunOfShow(runOfShow);
+          closeModalOverlay(modal);
+          renderShowTimeline();
+          showToast('Item deleted');
+        }
+      }
+    });
   };
 
   document.getElementById('show-item-cancel').onclick = () => {
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
   };
 
   document.getElementById('show-item-modal-close').onclick = () => {
-    modal.style.display = 'none';
+    closeModalOverlay(modal);
   };
 }
 
