@@ -127,7 +127,7 @@ function startRecordingTimers() {
       const roomKey = key.slice(prefix.length);
       const el = document.getElementById(`rec-timer-${roomKey}`);
       if (el) {
-        el.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - startTime)}`;
+        el.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - startTime)}`;
         el.classList.add('active');
       }
     }
@@ -957,7 +957,7 @@ function createRoomCard(room) {
   timerEl.id = `rec-timer-${room.key}`;
   if (recordingStartTimes[scopedKey(room.key)]) {
     timerEl.classList.add('active');
-    timerEl.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - recordingStartTimes[scopedKey(room.key)])}`;
+    timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[scopedKey(room.key)])}`;
   }
 
   nameWrap.appendChild(name);
@@ -1274,7 +1274,7 @@ function updateRoomCard(roomKey) {
     const sk = scopedKey(roomKey);
     if (recordingStartTimes[sk]) {
       timerEl.classList.add('active');
-      timerEl.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - recordingStartTimes[sk])}`;
+      timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[sk])}`;
     } else {
       timerEl.classList.remove('active');
       timerEl.innerHTML = '';
