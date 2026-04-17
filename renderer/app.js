@@ -79,11 +79,14 @@ function persistRecordingTimes() {
 let controlsLocked = localStorage.getItem('controlsLocked') === '1';
 
 function setControlsLocked(locked) {
-  controlsLocked = locked;
-  localStorage.setItem('controlsLocked', locked ? '1' : '0');
-  document.body.classList.toggle('controls-locked', locked);
-  showToast(locked ? '🔒 Controls locked' : '🔓 Controls unlocked');
+  const next = !!locked;
+  if (controlsLocked === next) return;  // no-op (also short-circuits Firebase echo loops)
+  controlsLocked = next;
+  localStorage.setItem('controlsLocked', next ? '1' : '0');
+  document.body.classList.toggle('controls-locked', next);
+  showToast(next ? '🔒 All Rooms locked' : '🔓 All Rooms unlocked');
   if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
+  if (typeof pushSafetyLockToTracker === 'function') pushSafetyLockToTracker();
 }
 
 function applyControlsLock() {
@@ -556,6 +559,7 @@ function setupEventListeners() {
       unsubscribeFromTrackerAudit();
       unsubscribeFromTrackerErrors();
       unsubscribeFromTrackerCrew();
+      unsubscribeFromTrackerSafetyLock();
       if (eventId) {
         await pushRoomsToTrackerEvent();
         await pushProxyUrlToTracker();
@@ -565,8 +569,10 @@ function setupEventListeners() {
         subscribeToTrackerAudit();
         subscribeToTrackerErrors();
         subscribeToTrackerCrew();
+        subscribeToTrackerSafetyLock();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
+        pushSafetyLockToTracker();
         showToast('Linked to ' + (trackerEvents[eventId]?.name || 'event'));
       } else {
         showToast('Unlinked from event');
@@ -2254,8 +2260,10 @@ async function connectToFirebase() {
     subscribeToTrackerAudit();
     subscribeToTrackerErrors();
     subscribeToTrackerCrew();
+    subscribeToTrackerSafetyLock();
     pushRunOfShowToTracker();
     pushRoomLocksToTracker();
+    pushSafetyLockToTracker();
 
     if (syncCheckbox) syncCheckbox.disabled = _readOnlyMode;
   } catch (error) {
@@ -2277,6 +2285,7 @@ function disconnectFromFirebase() {
   unsubscribeFromTrackerAudit();
   unsubscribeFromTrackerErrors();
   unsubscribeFromTrackerCrew();
+  unsubscribeFromTrackerSafetyLock();
   setReadOnlyMode(false);
   trackerEvents = {};
   renderEventSelect();
@@ -2888,6 +2897,55 @@ async function pushRunOfShowToTracker() {
     console.error('Failed to push run-of-show to tracker:', error);
     if (typeof pushErrorToTracker === 'function') {
       pushErrorToTracker({ message: 'pushRunOfShowToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRunOfShowToTracker' });
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Safety-lock sync
+// ────────────────────────────────────────────────────────────────────────
+// Shared global lock state lives at events/<id>/safetyLocked. Both apps
+// write/read it. Echo-loop prevention is handled by setControlsLocked()'s
+// no-op short-circuit when the value already matches local state.
+let _trackerSafetyLockRef = null;
+
+function subscribeToTrackerSafetyLock() {
+  unsubscribeFromTrackerSafetyLock();
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _trackerSafetyLockRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/safetyLocked`);
+  _trackerSafetyLockRef.on('value', (snap) => {
+    const remote = snap.val();
+    if (typeof remote !== 'boolean') return;  // initial empty state — ignore
+    setControlsLocked(remote);  // no-op short-circuits if already matching
+    if (appState.currentPage === 'rooms') renderRooms();
+  }, (error) => {
+    console.error('Tracker safetyLock subscription error:', error);
+  });
+}
+
+function unsubscribeFromTrackerSafetyLock() {
+  if (_trackerSafetyLockRef) {
+    try { _trackerSafetyLockRef.off(); } catch (_) { /* ignore */ }
+    _trackerSafetyLockRef = null;
+  }
+}
+
+async function pushSafetyLockToTracker() {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  try {
+    await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/safetyLocked`)
+      .set(!!controlsLocked);
+  } catch (error) {
+    console.error('Failed to push safetyLock to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushSafetyLockToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushSafetyLockToTracker' });
     }
   }
 }

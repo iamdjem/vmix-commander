@@ -97,12 +97,13 @@ body {
 
 
 /* All Rooms Master Card — visually distinct so it's harder to confuse for
- * a per-room card. Stronger orange tint, accented border, glow, and extra
- * bottom margin to create a clear gap before the individual room cards. */
+ * a per-room card. Uses a warning-tone gold/amber (matched 1:1 to the
+ * tracker's master card) rather than the brand orange so it reads as a
+ * "different kind of control" — both apps share the same accent here. */
 .all-rooms-card {
-  background: linear-gradient(135deg, rgba(244, 105, 42, 0.18), rgba(244, 105, 42, 0.06));
-  border-color: rgba(244, 105, 42, 0.55);
-  box-shadow: 0 0 0 1px rgba(244, 105, 42, 0.18), 0 4px 20px rgba(244, 105, 42, 0.08);
+  background: linear-gradient(135deg, rgba(212, 168, 67, 0.18), rgba(212, 168, 67, 0.06));
+  border-color: rgba(212, 168, 67, 0.55);
+  box-shadow: 0 0 0 1px rgba(212, 168, 67, 0.18), 0 4px 20px rgba(212, 168, 67, 0.08);
   grid-column: 1 / -1;
   margin-bottom: var(--sp-4);
 }
@@ -113,9 +114,9 @@ body {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 1.2px;
-  color: var(--accent);
-  background: rgba(244, 105, 42, 0.12);
-  border: 1px solid rgba(244, 105, 42, 0.35);
+  color: rgb(212, 168, 67);
+  background: rgba(212, 168, 67, 0.12);
+  border: 1px solid rgba(212, 168, 67, 0.4);
   padding: 2px 6px;
   border-radius: var(--r-sm);
   margin-left: var(--sp-2);
@@ -301,7 +302,7 @@ body.readonly-mode { padding-top: 32px; }
 }
 
 .all-rooms-card .room-name {
-  color: var(--accent);
+  color: rgb(212, 168, 67);
   letter-spacing: 0.02em;
 }
 
