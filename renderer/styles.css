@@ -181,12 +181,103 @@ body {
   filter: grayscale(0.5);
 }
 
+/* Per-room lock — applies to the cards carrying .room-locked */
+.room-card.room-locked .fn-toggle,
+.room-card.room-locked .btn-start-all,
+.room-card.room-locked .btn-stop-all {
+  pointer-events: none;
+  opacity: 0.35;
+  filter: grayscale(0.5);
+}
+
 /* Keep the safety lock itself interactive */
 .controls-locked .safety-lock,
-.controls-locked .safety-lock * {
+.controls-locked .safety-lock *,
+.room-card.room-locked .room-lock-btn,
+.room-card.room-locked .room-lock-btn * {
   pointer-events: auto;
   opacity: 1;
   filter: none;
+}
+
+/* Per-room lock toggle button (next to the gear) */
+.room-lock-btn {
+  background: none;
+  border: 1px solid var(--line2);
+  color: var(--t3);
+  border-radius: var(--r-md);
+  padding: var(--sp-2);
+  min-width: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--ease);
+  flex-shrink: 0;
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.room-lock-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.room-lock-btn.locked {
+  color: var(--red);
+  border-color: var(--red-muted);
+}
+
+/* Read-only sticky banner */
+.readonly-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 2500;
+  background: var(--red-muted);
+  color: #fff;
+  padding: var(--sp-2) var(--sp-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.readonly-banner .btn {
+  padding: var(--sp-1) var(--sp-3);
+}
+
+body.readonly-mode { padding-top: 32px; }
+
+/* Tracker-origin audit badge */
+.log-via-tracker {
+  display: inline-block;
+  padding: 1px var(--sp-2);
+  margin-left: var(--sp-2);
+  background: rgba(244, 105, 42, 0.15);
+  color: var(--accent);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  vertical-align: middle;
+}
+
+.log-entry.log-entry-tracker {
+  border-left: 2px solid var(--accent);
+}
+
+.log-toggle-tracker {
+  font-size: var(--fs-sm);
+  color: var(--t2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
 }
 
 .all-rooms-card .room-name {

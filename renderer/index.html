@@ -70,6 +70,10 @@
       <div class="page-toolbar">
         <button id="btn-export-log" class="btn btn-ghost btn-sm">Export CSV</button>
         <button id="btn-clear-log" class="btn btn-danger btn-sm">Clear Log</button>
+        <label class="checkbox-label log-toggle-tracker" style="margin-left: auto;">
+          <input type="checkbox" id="chk-log-show-tracker" checked>
+          <span>Show Tracker entries</span>
+        </label>
       </div>
       <div class="log-filters">
         <input type="text" id="log-filter-room" class="log-filter-input" placeholder="Filter by room">
@@ -335,6 +339,29 @@
         <button id="show-item-confirm" class="btn btn-primary btn-confirm">Save</button>
       </div>
     </div>
+  </div>
+
+  <!-- Concurrent-operator warning modal -->
+  <div id="concurrent-modal" class="modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="concurrent-modal-title">
+      <div class="modal-header">
+        <div class="modal-title" id="concurrent-modal-title">Another operator is active</div>
+      </div>
+      <div class="modal-body">
+        <p id="concurrent-modal-message" style="color: var(--t2); margin-bottom: var(--sp-2);">Another operator is currently controlling this event.</p>
+        <p style="color: var(--t3); font-size: var(--fs-sm);">Take over to become the active operator, or go read-only to monitor without sending commands.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="concurrent-readonly" class="btn btn-ghost btn-cancel">Go read-only</button>
+        <button id="concurrent-takeover" class="btn btn-primary btn-confirm">Take over</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Read-only sticky banner (shown when _readOnlyMode is true) -->
+  <div id="readonly-banner" class="readonly-banner" style="display:none" role="status" aria-live="polite">
+    <span>Read-only mode — another operator is active. vMix actions are disabled.</span>
+    <button id="readonly-banner-takeover" class="btn btn-ghost btn-sm">Take over</button>
   </div>
 
   <!-- Toast notifications -->

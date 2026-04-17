@@ -1,3 +1,20 @@
+// Stable per-install identifier — used by presence heartbeat + error telemetry
+// so the tracker can tell Commander instances apart when multiple connect to
+// the same event.
+const COMMANDER_ID = (() => {
+  try {
+    let id = localStorage.getItem('vmc:commanderId');
+    if (!id) {
+      id = (crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : 'cmd-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('vmc:commanderId', id);
+    }
+    return id;
+  } catch (_) {
+    return 'cmd-' + Date.now().toString(36);
+  }
+})();
+
 // State management
 let appState = {
   current: 'default',
@@ -9,8 +26,43 @@ let appState = {
   syncEnabled: false,
   eventCode: '',
   auditLog: [],
+  trackerAuditLog: [],   // mirror of the event's Firebase audit tree (most recent 500)
+  showTrackerAudit: true,
   logFilters: { room: '', user: '', action: '' }
 };
+
+// Read-only mode flag — flipped when the user chose "Go read-only" on the
+// concurrent-operator prompt. When true, no vMix-action call should fire and
+// the sync toggle is disabled.
+let _readOnlyMode = false;
+
+// Global error telemetry — wired up before any heavy init so we catch even
+// early boot failures. The pushErrorToTracker helper itself is defined lower
+// down; the listeners tolerate it being undefined for a few ms during boot.
+window.addEventListener('error', (ev) => {
+  try {
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({
+        message: ev.message || 'window error',
+        stack: (ev.error && ev.error.stack) || '',
+        context: 'window.onerror'
+      });
+    }
+  } catch (_) { /* never re-throw */ }
+});
+
+window.addEventListener('unhandledrejection', (ev) => {
+  try {
+    if (typeof pushErrorToTracker === 'function') {
+      const reason = ev.reason;
+      pushErrorToTracker({
+        message: reason && reason.message ? reason.message : String(reason),
+        stack: (reason && reason.stack) || '',
+        context: 'unhandledrejection'
+      });
+    }
+  } catch (_) { /* never re-throw */ }
+});
 
 let statusRefreshInterval = null;
 let showAutoTriggerInterval = null;
@@ -489,11 +541,45 @@ function setupEventListeners() {
     const profile = getCurrentProfile();
     profile.trackerEventId = eventId || null;
     await saveProfiles();
-    if (eventId && appState.syncEnabled) {
-      await pushRoomsToTrackerEvent();
-      showToast('Linked to ' + (trackerEvents[eventId]?.name || 'event'));
+    if (appState.syncEnabled) {
+      // Rebuild event-scoped subscriptions / presence / initial pushes.
+      stopPresenceHeartbeat();
+      unsubscribeFromTrackerAudit();
+      if (eventId) {
+        await pushRoomsToTrackerEvent();
+        await pushProxyUrlToTracker();
+        await pushVmixStatusToTracker();
+        await checkConcurrentOperator();
+        if (!_readOnlyMode) startPresenceHeartbeat();
+        subscribeToTrackerAudit();
+        pushRunOfShowToTracker();
+        pushRoomLocksToTracker();
+        showToast('Linked to ' + (trackerEvents[eventId]?.name || 'event'));
+      } else {
+        showToast('Unlinked from event');
+      }
     }
   });
+
+  // Log page — "Show Tracker entries" toggle
+  const logToggleTracker = document.getElementById('chk-log-show-tracker');
+  if (logToggleTracker) {
+    logToggleTracker.checked = appState.showTrackerAudit;
+    logToggleTracker.addEventListener('change', (e) => {
+      appState.showTrackerAudit = !!e.target.checked;
+      renderAuditLog();
+    });
+  }
+
+  // Read-only banner — "Take over" button
+  const bannerTakeover = document.getElementById('readonly-banner-takeover');
+  if (bannerTakeover) {
+    bannerTakeover.addEventListener('click', () => {
+      setReadOnlyMode(false);
+      startPresenceHeartbeat();
+      showToast('Took over as operator');
+    });
+  }
 
   // Audit log filters
   document.getElementById('log-filter-room').addEventListener('input', (e) => {
@@ -646,16 +732,33 @@ function createAllRoomsCard(rooms) {
 }
 
 async function allRoomsAction(rooms, action) {
+  if (_readOnlyMode) {
+    showToast('Read-only mode — vMix actions disabled');
+    return;
+  }
+
   const withIp = rooms.filter(r => r.ip);
   if (withIp.length === 0) {
     showToast('No rooms have an IP configured');
     return;
   }
 
-  if (!confirm(`${action === 'start' ? 'Start' : 'Stop'} recording/streaming/multicorder on all ${withIp.length} rooms?`)) {
+  // Destructive STOP ALL requires explicit confirmation. START ALL does not.
+  if (action === 'stop') {
+    showConfirm({
+      title: 'Stop all rooms?',
+      message: `This will stop recording, streaming, and MultiCorder on all ${withIp.length} rooms. Continue?`,
+      confirmLabel: 'Stop all rooms',
+      danger: true,
+      onConfirm: () => runAllRoomsAction(withIp, 'stop')
+    });
     return;
   }
 
+  runAllRoomsAction(withIp, action);
+}
+
+async function runAllRoomsAction(withIp, action) {
   showToast(`${action === 'start' ? 'Starting' : 'Stopping'} ${withIp.length} rooms…`);
 
   const fns = action === 'start'
@@ -687,10 +790,31 @@ async function allRoomsAction(rooms, action) {
   setTimeout(() => refreshAllStatus(), 1200);
 }
 
+// Per-room lock helpers — persists in profile.roomLocks and, when sync is on,
+// mirrors to Firebase via pushRoomLocksToTracker + pushVmixStatusToTracker.
+function isRoomLocked(roomKey) {
+  const profile = getCurrentProfile();
+  return !!(profile.roomLocks && profile.roomLocks[roomKey]);
+}
+
+async function setRoomLocked(roomKey, locked) {
+  const profile = getCurrentProfile();
+  if (!profile.roomLocks) profile.roomLocks = {};
+  if (locked) profile.roomLocks[roomKey] = true;
+  else delete profile.roomLocks[roomKey];
+  await saveProfiles();
+  pushRoomLocksToTracker();
+  pushVmixStatusToTracker();
+  const roomName = (profile.rooms.find(r => r.key === roomKey) || {}).name || roomKey;
+  showToast(locked ? `🔒 Locked: ${roomName}` : `🔓 Unlocked: ${roomName}`);
+  if (appState.currentPage === 'rooms') renderRooms();
+}
+
 // Create room card
 function createRoomCard(room) {
   const card = document.createElement('div');
   card.className = 'room-card';
+  if (isRoomLocked(room.key)) card.classList.add('room-locked');
   card.id = `room-card-${room.key}`;
   card.draggable = true;
   card.dataset.roomKey = room.key;
@@ -792,6 +916,18 @@ function createRoomCard(room) {
   nameWrap.appendChild(timerEl);
   nameWrap.appendChild(healthEl);
 
+  // Per-room lock toggle — sits between name and settings-gear.
+  const locked = isRoomLocked(room.key);
+  const lockBtn = document.createElement('button');
+  lockBtn.className = 'room-lock-btn' + (locked ? ' locked' : '');
+  lockBtn.title = locked ? 'Room locked — click to unlock' : 'Lock this room';
+  lockBtn.setAttribute('aria-label', locked ? 'Unlock room' : 'Lock room');
+  lockBtn.textContent = locked ? '🔒' : '🔓';
+  lockBtn.onclick = (e) => {
+    e.stopPropagation();
+    setRoomLocked(room.key, !isRoomLocked(room.key));
+  };
+
   const settingsBtn = document.createElement('button');
   settingsBtn.className = 'room-settings-btn';
   settingsBtn.innerHTML = ICONS.gear;
@@ -800,6 +936,7 @@ function createRoomCard(room) {
 
   header.appendChild(dragHandle);
   header.appendChild(nameWrap);
+  header.appendChild(lockBtn);
   header.appendChild(settingsBtn);
 
   // Function controls
@@ -913,6 +1050,10 @@ function reorderRooms(draggedKey, targetKey) {
 
 // Call vMix function
 async function callVmix(roomKey, functionName) {
+  if (_readOnlyMode) {
+    showToast('Read-only mode — vMix actions disabled');
+    return { ok: false, error: 'read-only' };
+  }
   const profile = getCurrentProfile();
   const room = profile.rooms.find(r => r.key === roomKey);
   if (!room || !room.ip) {
@@ -950,6 +1091,10 @@ async function callVmix(roomKey, functionName) {
 
 // Room action (start/stop all)
 async function roomAction(roomKey, action) {
+  if (_readOnlyMode) {
+    showToast('Read-only mode — vMix actions disabled');
+    return;
+  }
   const profile = getCurrentProfile();
   const room = profile.rooms.find(r => r.key === roomKey);
   if (!room || !room.ip) {
@@ -1510,6 +1655,10 @@ async function saveIdentity(identity) {
   appState.identity = identity;
   await window.identity.save(identity);
   if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
+  // Refresh presence so the tracker sees the new operator name/role.
+  if (appState.syncEnabled && !_readOnlyMode && typeof startPresenceHeartbeat === 'function') {
+    startPresenceHeartbeat();
+  }
 }
 
 function updateIdentityBadge() {
@@ -1710,33 +1859,67 @@ async function appendAuditLog(room, action, result) {
 
   await window.audit.append(entry);
   appState.auditLog.push(entry);
+
+  // Mirror to Firebase — local log remains primary. Errors are swallowed
+  // inside pushAuditToTracker.
+  pushAuditToTracker(room, action, result);
 }
 
 function renderAuditLog() {
   const container = document.getElementById('log-container');
   container.innerHTML = '';
 
-  // Filter by current conference profile
-  let filteredLog = appState.auditLog.filter(e => !e.profileKey || e.profileKey === appState.current);
+  // Local entries — scoped to the current conference profile
+  const local = appState.auditLog
+    .filter(e => !e.profileKey || e.profileKey === appState.current)
+    .map(e => ({
+      ts: e.ts,
+      tsMs: new Date(e.ts).getTime(),
+      user: e.user,
+      room: e.room,
+      action: e.action,
+      result: e.result,
+      viaTracker: false
+    }));
 
+  // Tracker-originated entries — only included when the toggle is on and we
+  // have a linked event. Tracker entries only exist scoped to this event so
+  // they're safe to include unconditionally once fetched.
+  let merged = local.slice();
+  if (appState.showTrackerAudit && Array.isArray(appState.trackerAuditLog)) {
+    const trackerOnly = appState.trackerAuditLog
+      .filter(e => e && e.source === 'tracker')
+      .map(e => ({
+        ts: new Date(e.timestamp || Date.now()).toISOString(),
+        tsMs: e.timestamp || 0,
+        user: (e.identity && e.identity.name) || 'tracker',
+        room: e.room || '',
+        action: e.action || '',
+        result: e.result || 'ok',
+        viaTracker: true
+      }));
+    merged = merged.concat(trackerOnly);
+  }
+
+  // Apply filters (room/user/action)
+  let filteredLog = merged;
   if (appState.logFilters.room) {
     filteredLog = filteredLog.filter(e =>
-      e.room.toLowerCase().includes(appState.logFilters.room.toLowerCase())
+      (e.room || '').toLowerCase().includes(appState.logFilters.room.toLowerCase())
     );
   }
-
   if (appState.logFilters.user) {
     filteredLog = filteredLog.filter(e =>
-      e.user.toLowerCase().includes(appState.logFilters.user.toLowerCase())
+      (e.user || '').toLowerCase().includes(appState.logFilters.user.toLowerCase())
     );
   }
-
   if (appState.logFilters.action) {
     filteredLog = filteredLog.filter(e => e.action === appState.logFilters.action);
   }
 
-  // Reverse chronological
-  filteredLog.reverse();
+  // Sort newest first, cap to 500
+  filteredLog.sort((a, b) => (b.tsMs || 0) - (a.tsMs || 0));
+  filteredLog = filteredLog.slice(0, 500);
 
   if (filteredLog.length === 0) {
     container.innerHTML = '<div class="log-empty">No log entries</div>';
@@ -1745,15 +1928,16 @@ function renderAuditLog() {
 
   filteredLog.forEach(entry => {
     const row = document.createElement('div');
-    row.className = 'log-entry';
+    row.className = 'log-entry' + (entry.viaTracker ? ' log-entry-tracker' : '');
 
     const time = new Date(entry.ts).toLocaleString();
-    const resultIcon = entry.result === 'ok' ? '✓' : '✗';
+    const resultIcon = entry.result === 'ok' ? '✓' : entry.result === 'denied' ? '∅' : '✗';
     const resultClass = entry.result === 'ok' ? 'log-result-ok' : 'log-result-fail';
+    const badge = entry.viaTracker ? '<span class="log-via-tracker">via Tracker</span>' : '';
 
     row.innerHTML = `
       <div class="log-time">${time}</div>
-      <div class="log-user">${entry.user}</div>
+      <div class="log-user">${entry.user}${badge}</div>
       <div class="log-room">${entry.room}</div>
       <div class="log-action">${entry.action}</div>
       <div class="log-result ${resultClass}">${resultIcon}</div>
@@ -1887,11 +2071,21 @@ async function connectToFirebase() {
     await pushProxyUrlToTracker();
     await pushVmixStatusToTracker();
 
-    if (syncCheckbox) syncCheckbox.disabled = false;
+    // Presence + concurrent-operator + audit mirror + run-of-show + room locks
+    await checkConcurrentOperator();
+    if (!_readOnlyMode) startPresenceHeartbeat();
+    subscribeToTrackerAudit();
+    pushRunOfShowToTracker();
+    pushRoomLocksToTracker();
+
+    if (syncCheckbox) syncCheckbox.disabled = _readOnlyMode;
   } catch (error) {
     console.error('Firebase connection error:', error);
     updateSyncStatus('🔴 ' + (error.message || 'Connection failed'), false);
     if (syncCheckbox) syncCheckbox.disabled = false;
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'connectToFirebase: ' + (error && error.message || error), stack: error && error.stack || '', context: 'connectToFirebase' });
+    }
   }
 }
 
@@ -1900,6 +2094,9 @@ function disconnectFromFirebase() {
     trackerEventsRef.off();
     trackerEventsRef = null;
   }
+  stopPresenceHeartbeat();
+  unsubscribeFromTrackerAudit();
+  setReadOnlyMode(false);
   trackerEvents = {};
   renderEventSelect();
   updateSyncStatus('🔴 Disconnected', false);
@@ -1956,6 +2153,9 @@ async function pushRoomsToTrackerEvent() {
     await firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/updatedAt`).set(Date.now());
   } catch (error) {
     console.error('Failed to push rooms to tracker event:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushRoomsToTrackerEvent: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRoomsToTrackerEvent' });
+    }
   }
 }
 
@@ -1968,17 +2168,41 @@ async function pushToFirebase() {
 // reach vMix (HTTP) via the commander's /vmix-proxy bridge. Without this,
 // the tracker falls back to direct HTTP and gets blocked by mixed-content,
 // showing every room's REC/STREAM/MULTI as OFF.
+// Writes both the legacy global node (for older tracker versions) and the
+// per-event config node so a tracker can prefer event-scoped URL when present.
 let _lastPushedProxyUrl = '';
+let _lastPushedProxyEventId = '';
 async function pushProxyUrlToTracker() {
   if (!appState.syncEnabled) return;
   if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
   const url = _currentTunnelUrl || '';
-  if (url === _lastPushedProxyUrl) return;
-  try {
-    await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmix_proxy_url`).set(url || null);
-    _lastPushedProxyUrl = url;
-  } catch (error) {
-    console.error('Failed to push proxy URL to tracker:', error);
+  const profile = getCurrentProfile();
+  const eventId = profile.trackerEventId || '';
+
+  // Legacy global write — always kept in sync for back-compat.
+  if (url !== _lastPushedProxyUrl) {
+    try {
+      await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmix_proxy_url`).set(url || null);
+      _lastPushedProxyUrl = url;
+    } catch (error) {
+      console.error('Failed to push proxy URL to tracker (global):', error);
+      if (typeof pushErrorToTracker === 'function') {
+        pushErrorToTracker({ message: 'pushProxyUrlToTracker global: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushProxyUrlToTracker' });
+      }
+    }
+  }
+
+  // Per-event write — newer shared contract.
+  if (eventId && (url !== _lastPushedProxyUrl || eventId !== _lastPushedProxyEventId)) {
+    try {
+      await firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${eventId}/config/vmixProxyUrl`).set(url || null);
+      _lastPushedProxyEventId = eventId;
+    } catch (error) {
+      console.error('Failed to push proxy URL to tracker (event):', error);
+      if (typeof pushErrorToTracker === 'function') {
+        pushErrorToTracker({ message: 'pushProxyUrlToTracker event: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushProxyUrlToTracker' });
+      }
+    }
   }
 }
 
@@ -2025,10 +2249,295 @@ async function pushVmixStatusToTracker() {
       updatedAt: Date.now(),
       operator: appState.identity ? { name: appState.identity.name || '', role: appState.identity.role || '' } : null,
       safetyLocked: !!controlsLocked,
-      rooms
+      rooms,
+      roomLocks: profile.roomLocks || {}
     });
   } catch (error) {
     console.error('Failed to push vmix status to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushVmixStatusToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushVmixStatusToTracker' });
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Presence heartbeat + concurrent-operator detection
+// ────────────────────────────────────────────────────────────────────────
+let _presenceInterval = null;
+let _presenceRef = null;
+
+function startPresenceHeartbeat() {
+  stopPresenceHeartbeat();
+  const profile = getCurrentProfile();
+  if (!appState.syncEnabled || !profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _presenceRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/controller`);
+  try { _presenceRef.onDisconnect().remove(); } catch (_) { /* ignore */ }
+
+  const writePresence = () => {
+    if (!_presenceRef) return;
+    const payload = {
+      commanderId: COMMANDER_ID,
+      operator: appState.identity
+        ? { name: appState.identity.name || '', role: appState.identity.role || '' }
+        : { name: '', role: '' },
+      lastHeartbeat: Date.now(),
+      safetyLocked: !!controlsLocked
+    };
+    _presenceRef.set(payload).catch((error) => {
+      console.error('Presence heartbeat write failed:', error);
+      if (typeof pushErrorToTracker === 'function') {
+        pushErrorToTracker({ message: 'presenceHeartbeat: ' + (error && error.message || error), stack: error && error.stack || '', context: 'presenceHeartbeat' });
+      }
+    });
+  };
+
+  writePresence();
+  _presenceInterval = setInterval(writePresence, 5000);
+}
+
+function stopPresenceHeartbeat() {
+  if (_presenceInterval) {
+    clearInterval(_presenceInterval);
+    _presenceInterval = null;
+  }
+  if (_presenceRef) {
+    try { _presenceRef.onDisconnect().cancel(); } catch (_) { /* ignore */ }
+    try { _presenceRef.remove(); } catch (_) { /* ignore */ }
+    _presenceRef = null;
+  }
+}
+
+// Read the current controller once on connect. If someone else is heartbeating
+// within the last 10s and they're not us, prompt the user.
+async function checkConcurrentOperator() {
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  try {
+    const snap = await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/controller`)
+      .once('value');
+    const current = snap.val();
+    if (!current) return;
+
+    const recent = current.lastHeartbeat && (Date.now() - current.lastHeartbeat) < 10000;
+    const different = current.commanderId && current.commanderId !== COMMANDER_ID;
+    if (recent && different) {
+      showConcurrentOperatorModal(current);
+    }
+  } catch (error) {
+    console.error('Concurrent-operator check failed:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'checkConcurrentOperator: ' + (error && error.message || error), stack: error && error.stack || '', context: 'checkConcurrentOperator' });
+    }
+  }
+}
+
+function showConcurrentOperatorModal(current) {
+  const modal = document.getElementById('concurrent-modal');
+  if (!modal) return;
+  const msgEl = document.getElementById('concurrent-modal-message');
+  const opName = (current.operator && current.operator.name) || 'An operator';
+  const opRole = (current.operator && current.operator.role) || '';
+  if (msgEl) {
+    msgEl.textContent = `${opName}${opRole ? ' (' + opRole + ')' : ''} is currently controlling this event. Their last heartbeat was just now.`;
+  }
+
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
+
+  const takeoverBtn = document.getElementById('concurrent-takeover');
+  const readonlyBtn = document.getElementById('concurrent-readonly');
+
+  const takeover = () => {
+    closeModalOverlay(modal);
+    setReadOnlyMode(false);
+    startPresenceHeartbeat();
+    showToast('Took over as operator');
+  };
+
+  const goReadOnly = () => {
+    closeModalOverlay(modal);
+    setReadOnlyMode(true);
+    showToast('Read-only mode enabled');
+  };
+
+  if (takeoverBtn) takeoverBtn.onclick = takeover;
+  if (readonlyBtn) readonlyBtn.onclick = goReadOnly;
+}
+
+function setReadOnlyMode(enabled) {
+  _readOnlyMode = !!enabled;
+  document.body.classList.toggle('readonly-mode', _readOnlyMode);
+  const banner = document.getElementById('readonly-banner');
+  if (banner) banner.style.display = _readOnlyMode ? 'flex' : 'none';
+
+  const syncCheckbox = document.getElementById('chk-sync-enabled');
+  if (syncCheckbox) syncCheckbox.disabled = _readOnlyMode;
+
+  if (_readOnlyMode) {
+    // Stop heartbeating — we are not the active controller.
+    stopPresenceHeartbeat();
+  }
+  // Re-render so fn-toggles reflect the gating
+  if (appState.currentPage === 'rooms') renderRooms();
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Audit mirror + live tracker audit subscription
+// ────────────────────────────────────────────────────────────────────────
+let _trackerAuditRef = null;
+
+async function pushAuditToTracker(room, action, result) {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  try {
+    const ref = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/audit`);
+    const entry = {
+      timestamp: Date.now(),
+      source: 'commander',
+      identity: appState.identity || null,
+      action,
+      room,
+      result
+    };
+    await ref.push().set(entry);
+  } catch (error) {
+    console.error('Failed to mirror audit entry to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushAuditToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushAuditToTracker' });
+    }
+  }
+}
+
+function subscribeToTrackerAudit() {
+  unsubscribeFromTrackerAudit();
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _trackerAuditRef = firebaseDb
+    .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/audit`)
+    .limitToLast(500);
+
+  _trackerAuditRef.on('value', (snap) => {
+    const val = snap.val() || {};
+    appState.trackerAuditLog = Object.keys(val).map(id => ({ id, ...val[id] }));
+    if (appState.currentPage === 'log') renderAuditLog();
+  }, (error) => {
+    console.error('Tracker audit subscription error:', error);
+  });
+}
+
+function unsubscribeFromTrackerAudit() {
+  if (_trackerAuditRef) {
+    try { _trackerAuditRef.off(); } catch (_) { /* ignore */ }
+    _trackerAuditRef = null;
+  }
+  appState.trackerAuditLog = [];
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Run-of-show sync (debounced)
+// ────────────────────────────────────────────────────────────────────────
+let _runOfShowPushTimer = null;
+function schedulePushRunOfShow() {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (_runOfShowPushTimer) clearTimeout(_runOfShowPushTimer);
+  _runOfShowPushTimer = setTimeout(() => {
+    _runOfShowPushTimer = null;
+    pushRunOfShowToTracker();
+  }, 400);
+}
+
+async function pushRunOfShowToTracker() {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  try {
+    const payload = Array.isArray(profile.runOfShow) ? profile.runOfShow : [];
+    await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/runOfShow`)
+      .set(payload);
+  } catch (error) {
+    console.error('Failed to push run-of-show to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushRunOfShowToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRunOfShowToTracker' });
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Room-lock sync
+// ────────────────────────────────────────────────────────────────────────
+async function pushRoomLocksToTracker() {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  try {
+    await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomLocks`)
+      .set(profile.roomLocks || {});
+  } catch (error) {
+    console.error('Failed to push roomLocks to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushRoomLocksToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRoomLocksToTracker' });
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Error telemetry
+// ────────────────────────────────────────────────────────────────────────
+let _lastErrorPushAt = 0;
+const _ERROR_MAX_LEN = 8000;
+
+function pushErrorToTracker(payload) {
+  try {
+    if (!appState || !appState.syncEnabled) return;
+    const profile = getCurrentProfile();
+    if (!profile || !profile.trackerEventId) return;
+    if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+    // Rate-limit: max 1 error write per 500ms
+    const now = Date.now();
+    if (now - _lastErrorPushAt < 500) return;
+    _lastErrorPushAt = now;
+
+    const msg = String(payload && payload.message || '').slice(0, _ERROR_MAX_LEN);
+    const stack = String(payload && payload.stack || '').slice(0, _ERROR_MAX_LEN);
+    const context = String(payload && payload.context || '').slice(0, 500);
+
+    const entry = {
+      timestamp: now,
+      source: 'commander',
+      commanderId: COMMANDER_ID,
+      identity: appState.identity || null,
+      message: msg,
+      stack,
+      context
+    };
+
+    firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/errors`)
+      .push()
+      .set(entry)
+      .catch((err) => { console.error('pushErrorToTracker write failed:', err); });
+  } catch (err) {
+    // Must never re-throw
+    console.error('pushErrorToTracker threw:', err);
   }
 }
 
@@ -2045,6 +2554,7 @@ function saveRunOfShow(runOfShow) {
   const profile = getCurrentProfile();
   profile.runOfShow = runOfShow;
   saveProfiles();
+  schedulePushRunOfShow();
 }
 
 function renderShowTimeline() {
