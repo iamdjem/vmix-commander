@@ -219,12 +219,8 @@ async function init() {
   const profile = getCurrentProfile();
   if (profile.syncEnabled) {
     appState.syncEnabled = profile.syncEnabled;
-    appState.eventCode = profile.eventCode || '';
     document.getElementById('chk-sync-enabled').checked = true;
-    document.getElementById('sync-event-code').value = appState.eventCode;
-    if (appState.eventCode) {
-      connectToFirebase();
-    }
+    connectToFirebase();
   }
 
   // Start auto-trigger checker for run-of-show
@@ -458,32 +454,23 @@ function setupEventListeners() {
     profile.syncEnabled = appState.syncEnabled;
 
     if (appState.syncEnabled) {
-      const eventCode = document.getElementById('sync-event-code').value.trim();
-      if (eventCode) {
-        appState.eventCode = eventCode;
-        profile.eventCode = eventCode;
-        await saveProfiles();
-        await connectToFirebase();
-      } else {
-        showToast('Please enter an event code');
-        e.target.checked = false;
-      }
+      await saveProfiles();
+      await connectToFirebase();
     } else {
       disconnectFromFirebase();
-      profile.eventCode = '';
       await saveProfiles();
     }
   });
 
-  // Event code input
-  document.getElementById('sync-event-code').addEventListener('change', async (e) => {
-    const eventCode = e.target.value.trim();
-    if (eventCode && appState.syncEnabled) {
-      appState.eventCode = eventCode;
-      const profile = getCurrentProfile();
-      profile.eventCode = eventCode;
-      await saveProfiles();
-      await connectToFirebase();
+  // Event select dropdown — link this conference profile to a tracker event
+  document.getElementById('sync-event-select').addEventListener('change', async (e) => {
+    const eventId = e.target.value;
+    const profile = getCurrentProfile();
+    profile.trackerEventId = eventId || null;
+    await saveProfiles();
+    if (eventId && appState.syncEnabled) {
+      await pushRoomsToTrackerEvent();
+      showToast('Linked to ' + (trackerEvents[eventId]?.name || 'event'));
     }
   });
 
@@ -1188,6 +1175,8 @@ function renderSettings() {
   const profile = getCurrentProfile();
 
   document.getElementById('settings-profile-name').textContent = profile.name;
+  document.getElementById('chk-sync-enabled').checked = !!profile.syncEnabled;
+  renderEventSelect();
 
   const roomsList = document.getElementById('settings-rooms-list');
   roomsList.innerHTML = '';
@@ -1681,102 +1670,150 @@ async function clearAuditLog() {
 // FIREBASE CLOUD SYNC
 // ========================================
 
+// Tracker Firebase config (shared with kubecon-tracker)
+const TRACKER_FB_CONFIG = {
+  apiKey: 'AIzaSyAo1IeN6TnsKC48_ZJG6BWxke_T1l8Ke2g',
+  authDomain: 'kubecon-tracker.firebaseapp.com',
+  databaseURL: 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app',
+  projectId: 'kubecon-tracker'
+};
+const TRACKER_FB_ROOT = 'e3-kc26-x7k9m';
+const TRACKER_USER_EMAIL = 'user@e3tracker.local';
+const TRACKER_USER_PASSWORD = 'e3crew';
+
+let trackerAuth = null;
+let trackerEvents = {};  // { eventId: eventObject } cached from tracker
+let trackerEventsRef = null;
+
 function loadFirebaseScripts() {
-  return new Promise((resolve) => {
-    if (window.firebase) {
+  return new Promise((resolve, reject) => {
+    if (window.firebase && firebase.auth) {
       resolve();
       return;
     }
 
-    const script1 = document.createElement('script');
-    script1.src = 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js';
-    document.head.appendChild(script1);
+    const scripts = [
+      'https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js',
+      'https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js',
+      'https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js'
+    ];
 
-    script1.onload = () => {
-      const script2 = document.createElement('script');
-      script2.src = 'https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js';
-      document.head.appendChild(script2);
-      script2.onload = resolve;
-    };
+    let loaded = 0;
+    scripts.forEach(src => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => { if (++loaded === scripts.length) resolve(); };
+      s.onerror = () => reject(new Error('Failed to load ' + src));
+      document.head.appendChild(s);
+    });
   });
+}
+
+async function initTrackerFirebase() {
+  if (firebaseDb && trackerAuth && trackerAuth.currentUser) return;
+
+  await loadFirebaseScripts();
+
+  if (!firebase.apps.length) {
+    firebase.initializeApp(TRACKER_FB_CONFIG);
+  }
+  firebaseDb = firebase.database();
+  trackerAuth = firebase.auth();
+
+  // Sign in as user role (crew, not admin — we only read events and write rooms)
+  if (!trackerAuth.currentUser) {
+    await trackerAuth.signInWithEmailAndPassword(TRACKER_USER_EMAIL, TRACKER_USER_PASSWORD);
+  }
 }
 
 async function connectToFirebase() {
   const syncCheckbox = document.getElementById('chk-sync-enabled');
   if (syncCheckbox) syncCheckbox.disabled = true;
 
-  if (!appState.eventCode) {
-    updateSyncStatus('🔴 No event code', false);
-    if (syncCheckbox) syncCheckbox.disabled = false;
-    return;
-  }
-
-  updateSyncStatus('🟡 Connecting...', false);
+  updateSyncStatus('🟡 Connecting…', false);
 
   try {
-    await loadFirebaseScripts();
+    await initTrackerFirebase();
 
-    if (!firebaseDb) {
-      const firebaseConfig = {
-        databaseURL: 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app'
-      };
-
-      if (!firebase.apps.length) {
-        firebase.initializeApp(firebaseConfig);
-      }
-      firebaseDb = firebase.database();
+    // Listen to the tracker's events collection
+    if (!trackerEventsRef) {
+      trackerEventsRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events`);
+      trackerEventsRef.on('value', async (snap) => {
+        trackerEvents = snap.val() || {};
+        renderEventSelect();
+        updateSyncStatus('🟢 Connected', true);
+        // Push rooms to linked event on each sync
+        await pushRoomsToTrackerEvent();
+      });
     }
-
-    // Listen to remote changes
-    firebaseRef = firebaseDb.ref(`vmix-commander/${appState.eventCode}/profiles`);
-
-    firebaseRef.on('value', (snapshot) => {
-      const remoteProfiles = snapshot.val();
-      if (remoteProfiles) {
-        // Merge remote with local (remote wins)
-        Object.keys(remoteProfiles).forEach(key => {
-          appState.profiles[key] = remoteProfiles[key];
-        });
-        saveProfiles();
-        if (appState.currentPage === 'rooms') renderRooms();
-        if (appState.currentPage === 'events') renderProfiles();
-      }
-      updateSyncStatus('🟢 Connected', true);
-    });
-
-    // Push current profiles to Firebase
-    await firebaseRef.set(appState.profiles);
 
     if (syncCheckbox) syncCheckbox.disabled = false;
   } catch (error) {
     console.error('Firebase connection error:', error);
-    updateSyncStatus('🔴 Connection failed', false);
+    updateSyncStatus('🔴 ' + (error.message || 'Connection failed'), false);
     if (syncCheckbox) syncCheckbox.disabled = false;
   }
 }
 
 function disconnectFromFirebase() {
-  if (firebaseRef) {
-    firebaseRef.off();
-    firebaseRef = null;
+  if (trackerEventsRef) {
+    trackerEventsRef.off();
+    trackerEventsRef = null;
   }
+  trackerEvents = {};
+  renderEventSelect();
   updateSyncStatus('🔴 Disconnected', false);
 }
 
 function updateSyncStatus(message, connected) {
   const statusEl = document.getElementById('sync-status');
+  if (!statusEl) return;
   statusEl.textContent = message;
   statusEl.className = 'sync-status ' + (connected ? 'sync-connected' : 'sync-disconnected');
 }
 
-async function pushToFirebase() {
-  if (!appState.syncEnabled || !firebaseRef) return;
+// Populate the event dropdown with live events from the tracker
+function renderEventSelect() {
+  const select = document.getElementById('sync-event-select');
+  if (!select) return;
+
+  const profile = getCurrentProfile();
+  const currentLinkedId = profile.trackerEventId || '';
+
+  // Sort: live first (non-archived), newest updatedAt first
+  const events = Object.values(trackerEvents)
+    .sort((a, b) => {
+      if (a.archived !== b.archived) return a.archived ? 1 : -1;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+
+  select.innerHTML = '<option value="">— Not linked —</option>' +
+    events.map(ev => {
+      const label = (ev.name || 'Untitled') + (ev.archived ? ' (archived)' : '');
+      const sel = ev.id === currentLinkedId ? ' selected' : '';
+      return `<option value="${ev.id}"${sel}>${label}</option>`;
+    }).join('');
+}
+
+// Push active profile's rooms to the linked tracker event
+async function pushRoomsToTrackerEvent() {
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId || !firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
 
   try {
-    await firebaseRef.set(appState.profiles);
+    const path = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`;
+    const rooms = profile.rooms.map(r => ({ key: r.key, name: r.name, ip: r.ip || '' }));
+    await firebaseDb.ref(path).set(rooms);
+    // Also bump updatedAt so the tracker re-syncs
+    await firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/updatedAt`).set(Date.now());
   } catch (error) {
-    console.error('Failed to push to Firebase:', error);
+    console.error('Failed to push rooms to tracker event:', error);
   }
+}
+
+async function pushToFirebase() {
+  if (!appState.syncEnabled) return;
+  await pushRoomsToTrackerEvent();
 }
 
 // ========================================

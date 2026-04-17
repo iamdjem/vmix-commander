@@ -22,7 +22,7 @@
   <div id="top-header" class="top-header">
     <div class="header-left">
       <div id="header-page-title" class="header-title">Room Control</div>
-      <span class="header-version">v0.5.6</span>
+      <span class="header-version">v0.6.0</span>
     </div>
     <div class="header-right">
       <div id="proxy-status-inline" class="proxy-status-inline">
@@ -139,11 +139,14 @@
           <div class="settings-label">Cloud Sync</div>
           <label class="checkbox-label">
             <input type="checkbox" id="chk-sync-enabled">
-            <span>Enable Cloud Sync</span>
+            <span>Sync with Crew Tracker</span>
           </label>
           <div style="margin-top: 8px;">
-            <input type="text" id="sync-event-code" class="sync-input" placeholder="Event code (e.g. kc-eu-26)">
-            <div id="sync-status" class="sync-status"></div>
+            <label style="display: block; margin-bottom: 6px; color: var(--t3); font-size: 12px;">Link this conference to a tracker event:</label>
+            <select id="sync-event-select" class="modal-select">
+              <option value="">— Not linked —</option>
+            </select>
+            <div id="sync-status" class="sync-status" style="margin-top: 8px;"></div>
           </div>
         </div>
 
@@ -169,7 +172,7 @@
 
         <div class="settings-section settings-about">
           <div class="settings-label">About</div>
-          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander v0.5.6</div>
+          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander v0.6.0</div>
         </div>
       </div>
     </div>
