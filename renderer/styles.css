@@ -345,6 +345,7 @@ body.readonly-mode { padding-top: 32px; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-3) var(--sp-2);
 }
 

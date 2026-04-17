@@ -97,7 +97,9 @@ function applyControlsLock() {
 const ICONS = {
   get gear() { const tpl = document.getElementById('icon-gear'); return tpl ? tpl.innerHTML.trim() : ''; },
   get play() { const tpl = document.getElementById('icon-play'); return tpl ? tpl.innerHTML.trim() : ''; },
-  get stop() { const tpl = document.getElementById('icon-stop'); return tpl ? tpl.innerHTML.trim() : ''; }
+  get stop() { const tpl = document.getElementById('icon-stop'); return tpl ? tpl.innerHTML.trim() : ''; },
+  get lock() { const tpl = document.getElementById('icon-lock'); return tpl ? tpl.innerHTML.trim() : ''; },
+  get unlock() { const tpl = document.getElementById('icon-unlock'); return tpl ? tpl.innerHTML.trim() : ''; }
 };
 
 // Scope keys by profile to prevent cross-conference collision
@@ -968,7 +970,7 @@ function createRoomCard(room) {
   lockBtn.className = 'room-lock-btn' + (locked ? ' locked' : '');
   lockBtn.title = locked ? 'Room locked — click to unlock' : 'Lock this room';
   lockBtn.setAttribute('aria-label', locked ? 'Unlock room' : 'Lock room');
-  lockBtn.textContent = locked ? '🔒' : '🔓';
+  lockBtn.innerHTML = locked ? ICONS.lock : ICONS.unlock;
   lockBtn.onclick = (e) => {
     e.stopPropagation();
     setRoomLocked(room.key, !isRoomLocked(room.key));
