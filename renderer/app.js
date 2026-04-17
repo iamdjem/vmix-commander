@@ -30,6 +30,7 @@ function setControlsLocked(locked) {
   localStorage.setItem('controlsLocked', locked ? '1' : '0');
   document.body.classList.toggle('controls-locked', locked);
   showToast(locked ? '🔒 Controls locked' : '🔓 Controls unlocked');
+  if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
 }
 
 function applyControlsLock() {
@@ -1038,6 +1039,7 @@ async function refreshStatus(roomKey) {
   }
 
   updateRoomCard(roomKey);
+  schedulePushVmixStatus();
 }
 
 // Targeted DOM updates — avoids full card replacement, preserves focus/animations
@@ -1243,6 +1245,7 @@ function switchProfile(key) {
   else if (appState.currentPage === 'settings') renderSettings();
 
   showToast('Switched to ' + appState.profiles[key].name);
+  if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
 }
 
 // Copy a profile
@@ -1506,6 +1509,7 @@ async function loadIdentity() {
 async function saveIdentity(identity) {
   appState.identity = identity;
   await window.identity.save(identity);
+  if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
 }
 
 function updateIdentityBadge() {
@@ -1875,12 +1879,13 @@ async function connectToFirebase() {
       });
     }
 
-    // Initial push of rooms + proxy URL after connecting.
+    // Initial push of rooms + proxy URL + vmix status after connecting.
     // Previously this ran on every snapshot, which created a feedback loop
     // (writing updatedAt re-triggered the snapshot listener) and caused the
     // event dropdown to close itself mid-click.
     await pushRoomsToTrackerEvent();
     await pushProxyUrlToTracker();
+    await pushVmixStatusToTracker();
 
     if (syncCheckbox) syncCheckbox.disabled = false;
   } catch (error) {
@@ -1974,6 +1979,56 @@ async function pushProxyUrlToTracker() {
     _lastPushedProxyUrl = url;
   } catch (error) {
     console.error('Failed to push proxy URL to tracker:', error);
+  }
+}
+
+// Publish rich per-room status + operator identity + safety-lock state to
+// the tracker, as a single blob per event. The tracker uses this as the
+// source of truth for its Recording page so crew see the same data the
+// operator sees (recording timer, ping, tier, lock state).
+//
+// Written outside the events/ tree so Commander's own events listener
+// doesn't re-fire on every status push.
+let _pushVmixStatusTimer = null;
+function schedulePushVmixStatus() {
+  if (_pushVmixStatusTimer) return;
+  _pushVmixStatusTimer = setTimeout(() => {
+    _pushVmixStatusTimer = null;
+    pushVmixStatusToTracker();
+  }, 400);
+}
+
+async function pushVmixStatusToTracker() {
+  if (!appState.syncEnabled) return;
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  const rooms = {};
+  profile.rooms.forEach(r => {
+    const sk = scopedKey(r.key);
+    const s = appState.vmixStatus[sk] || {};
+    const h = appState.vmixHealth[sk] || {};
+    rooms[r.key] = {
+      ok: !!s.ok,
+      recording: !!s.recording,
+      streaming: !!s.streaming,
+      multicorder: !!s.multicorder,
+      latency: h.latency || 0,
+      tier: h.tier || 'offline',
+      recordingStartTime: recordingStartTimes[sk] || null
+    };
+  });
+
+  try {
+    await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmixStatus/${profile.trackerEventId}`).set({
+      updatedAt: Date.now(),
+      operator: appState.identity ? { name: appState.identity.name || '', role: appState.identity.role || '' } : null,
+      safetyLocked: !!controlsLocked,
+      rooms
+    });
+  } catch (error) {
+    console.error('Failed to push vmix status to tracker:', error);
   }
 }
 
