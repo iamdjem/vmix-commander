@@ -22,6 +22,20 @@ function persistRecordingTimes() {
   localStorage.setItem('recordingStartTimes', JSON.stringify(recordingStartTimes));
 }
 
+// Safety lock — when locked, all room controls are disabled
+let controlsLocked = localStorage.getItem('controlsLocked') === '1';
+
+function setControlsLocked(locked) {
+  controlsLocked = locked;
+  localStorage.setItem('controlsLocked', locked ? '1' : '0');
+  document.body.classList.toggle('controls-locked', locked);
+  showToast(locked ? '🔒 Controls locked' : '🔓 Controls unlocked');
+}
+
+function applyControlsLock() {
+  document.body.classList.toggle('controls-locked', controlsLocked);
+}
+
 // Shared icon markup — sourced from <template> blocks in index.html
 const ICONS = {
   get gear() { const tpl = document.getElementById('icon-gear'); return tpl ? tpl.innerHTML.trim() : ''; },
@@ -172,6 +186,8 @@ if (window.proxy) {
 
 // Restart tunnel button (on tunnel page)
 document.addEventListener('DOMContentLoaded', () => {
+  applyControlsLock();
+
   const restartBtn = document.getElementById('btn-restart-tunnel');
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
@@ -584,6 +600,24 @@ function createAllRoomsCard(rooms) {
   nameWrap.appendChild(name);
   nameWrap.appendChild(count);
   header.appendChild(nameWrap);
+
+  // Safety lock toggle (top right)
+  const lockWrap = document.createElement('label');
+  lockWrap.className = 'safety-lock' + (controlsLocked ? ' locked' : '');
+  lockWrap.title = 'Lock all room controls to prevent accidental taps';
+  lockWrap.innerHTML = `
+    <span class="safety-lock-label">${controlsLocked ? 'LOCKED' : 'LIVE'}</span>
+    <span class="safety-lock-switch">
+      <input type="checkbox" ${controlsLocked ? 'checked' : ''}>
+      <span class="safety-lock-slider"></span>
+    </span>
+  `;
+  const lockInput = lockWrap.querySelector('input');
+  lockInput.onchange = (e) => {
+    setControlsLocked(e.target.checked);
+    renderRooms();
+  };
+  header.appendChild(lockWrap);
 
   const masterControls = document.createElement('div');
   masterControls.className = 'master-controls';

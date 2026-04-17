@@ -103,6 +103,92 @@ body {
   grid-column: 1 / -1;
 }
 
+/* Safety Lock Toggle */
+.safety-lock {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.safety-lock-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--green);
+}
+
+.safety-lock.locked .safety-lock-label {
+  color: var(--red);
+}
+
+.safety-lock-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.safety-lock-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.safety-lock-slider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(93, 204, 93, 0.3);
+  border: 1px solid rgba(93, 204, 93, 0.5);
+  border-radius: 10px;
+  transition: all var(--ease);
+}
+
+.safety-lock-slider::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--green);
+  border-radius: 50%;
+  transition: all var(--ease);
+}
+
+.safety-lock input:checked ~ .safety-lock-slider {
+  background: rgba(204, 93, 93, 0.3);
+  border-color: rgba(204, 93, 93, 0.5);
+}
+
+.safety-lock input:checked ~ .safety-lock-slider::before {
+  background: var(--red);
+  transform: translateX(16px);
+}
+
+/* Locked state — disable all vMix controls */
+.controls-locked .fn-toggle,
+.controls-locked .btn-start-all,
+.controls-locked .btn-stop-all {
+  pointer-events: none;
+  opacity: 0.35;
+  filter: grayscale(0.5);
+}
+
+/* Keep the safety lock itself interactive */
+.controls-locked .safety-lock,
+.controls-locked .safety-lock * {
+  pointer-events: auto;
+  opacity: 1;
+  filter: none;
+}
+
 .all-rooms-card .room-name {
   color: var(--accent);
   letter-spacing: 0.02em;
