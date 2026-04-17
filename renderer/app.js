@@ -545,6 +545,7 @@ function setupEventListeners() {
       // Rebuild event-scoped subscriptions / presence / initial pushes.
       stopPresenceHeartbeat();
       unsubscribeFromTrackerAudit();
+      unsubscribeFromTrackerCrew();
       if (eventId) {
         await pushRoomsToTrackerEvent();
         await pushProxyUrlToTracker();
@@ -552,6 +553,7 @@ function setupEventListeners() {
         await checkConcurrentOperator();
         if (!_readOnlyMode) startPresenceHeartbeat();
         subscribeToTrackerAudit();
+        subscribeToTrackerCrew();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
         showToast('Linked to ' + (trackerEvents[eventId]?.name || 'event'));
@@ -644,9 +646,16 @@ function renderRooms() {
 
   let roomsToShow = profile.rooms;
 
-  // Apply Operator filter: show only assigned room
-  if (appState.identity && appState.identity.role === 'Operator' && appState.identity.assignedRoom) {
-    roomsToShow = profile.rooms.filter(r => r.key === appState.identity.assignedRoom);
+  // Apply Operator filter: show only assigned room(s). Newer identities carry
+  // `assignedRooms` (string[] of room keys); older ones only have a single
+  // `assignedRoom`. Fall back to that for back-compat.
+  if (appState.identity && appState.identity.role === 'Operator') {
+    const keys = appState.identity.assignedRooms && appState.identity.assignedRooms.length
+      ? appState.identity.assignedRooms
+      : (appState.identity.assignedRoom ? [appState.identity.assignedRoom] : []);
+    if (keys.length) {
+      roomsToShow = profile.rooms.filter(r => keys.includes(r.key));
+    }
   }
 
   if (roomsToShow.length === 0) {
@@ -1649,6 +1658,13 @@ function setButtonLoading(btn, loading, label) {
 
 async function loadIdentity() {
   appState.identity = await window.identity.get();
+  // Back-compat migration: older identities stored a single `assignedRoom`
+  // string. New code reads `assignedRooms` (string[] of room keys) as the
+  // source of truth. Keep `assignedRoom` around so any not-yet-migrated code
+  // paths continue to work.
+  if (appState.identity && appState.identity.assignedRoom && !appState.identity.assignedRooms) {
+    appState.identity.assignedRooms = [appState.identity.assignedRoom];
+  }
 }
 
 async function saveIdentity(identity) {
@@ -1665,32 +1681,118 @@ function updateIdentityBadge() {
   // Identity is shown on Settings page, no longer in header
 }
 
-function showIdentityOnboarding() {
-  const modal = document.getElementById('identity-modal');
-  openModalOverlay(modal);
-  enableModalClose(modal, () => { closeModalOverlay(modal); });
+// Re-render the crew-member dropdown inside the identity modal. Called on
+// modal open AND whenever the tracker crew list updates while the modal is
+// open. Preserves the current selection if it still matches a crew id;
+// falls back to "__custom__" otherwise.
+function renderTrackerCrewDropdown() {
+  const select = document.getElementById('identity-crew');
+  const helper = document.getElementById('identity-crew-helper');
+  if (!select) return;
 
-  // Populate room selector for Operator role
+  const previousValue = select.value || '__custom__';
+
+  const staticOptions = [
+    '<option value="__custom__">— Custom identity —</option>',
+    '<option value="__director__">Director — All rooms</option>'
+  ];
+
+  const crewOptions = (trackerCrewList || [])
+    .filter(c => c && c.id && c.name)
+    .map(c => {
+      const roomLabels = Array.isArray(c.rooms) && c.rooms.length
+        ? ' (' + c.rooms.map(r => (r && r.name) || '').filter(Boolean).join(', ') + ')'
+        : '';
+      const safeName = String(c.name).replace(/</g, '&lt;');
+      const safeRooms = roomLabels.replace(/</g, '&lt;');
+      return `<option value="${c.id}">${safeName}${safeRooms}</option>`;
+    });
+
+  select.innerHTML = staticOptions.concat(crewOptions).join('');
+
+  // Restore previous selection if still valid.
+  const stillValid = Array.from(select.options).some(o => o.value === previousValue);
+  select.value = stillValid ? previousValue : '__custom__';
+
+  if (helper) {
+    helper.style.display = crewOptions.length === 0 ? 'block' : 'none';
+  }
+}
+
+// Shared wiring for the identity modal. `onSave(identity)` fires after a
+// valid identity is assembled and saved.
+function wireIdentityModal({ onSave }) {
+  const modal = document.getElementById('identity-modal');
+  const nameInput = document.getElementById('identity-name');
   const roleSelect = document.getElementById('identity-role');
+  const crewSelect = document.getElementById('identity-crew');
+  const crewHint = document.getElementById('identity-crew-hint');
   const roomSelector = document.getElementById('identity-room-selector');
   const assignedRoomSelect = document.getElementById('identity-assigned-room');
 
-  roleSelect.onchange = () => {
-    if (roleSelect.value === 'Operator') {
+  // Show the assigned-room picker whenever the role is "Operator" AND the
+  // user is not locked into a crew-driven selection.
+  const updateRoomSelector = () => {
+    const crewLocked = crewSelect.value !== '__custom__' && crewSelect.value !== '__director__';
+    if (roleSelect.value === 'Operator' && !crewLocked) {
       roomSelector.style.display = 'block';
-      // Populate rooms (will use default profile rooms for now)
       const profile = getCurrentProfile();
+      const current = assignedRoomSelect.value;
       assignedRoomSelect.innerHTML = profile.rooms.map(r =>
-        `<option value="${r.key}">${r.name}</option>`
+        `<option value="${r.key}"${r.key === current ? ' selected' : ''}>${r.name}</option>`
       ).join('');
     } else {
       roomSelector.style.display = 'none';
     }
   };
 
+  // Apply the currently-selected crew option to the Name/Role inputs.
+  const applyCrewSelection = () => {
+    const value = crewSelect.value;
+    if (value === '__custom__') {
+      nameInput.disabled = false;
+      roleSelect.disabled = false;
+      if (crewHint) crewHint.style.display = 'none';
+      updateRoomSelector();
+      return;
+    }
+    if (value === '__director__') {
+      // Director shortcut — only fill name if blank.
+      if (!nameInput.value.trim() && appState.identity && appState.identity.name) {
+        nameInput.value = appState.identity.name;
+      }
+      roleSelect.value = 'Director';
+      nameInput.disabled = false;
+      roleSelect.disabled = false;
+      if (crewHint) crewHint.style.display = 'none';
+      updateRoomSelector();
+      return;
+    }
+    // Crew-member selection — auto-fill and lock Name/Role.
+    const crew = (trackerCrewList || []).find(c => c && c.id === value);
+    if (crew) {
+      nameInput.value = crew.name || '';
+      roleSelect.value = 'Operator';
+    }
+    nameInput.disabled = true;
+    roleSelect.disabled = true;
+    if (crewHint) crewHint.style.display = 'block';
+    // Crew members hide the single-room picker — assignedRooms is derived
+    // from the crew's room list instead.
+    roomSelector.style.display = 'none';
+  };
+
+  renderTrackerCrewDropdown();
+  crewSelect.onchange = applyCrewSelection;
+  roleSelect.onchange = updateRoomSelector;
+
+  // Initial pass so the room picker is in the right state on open.
+  applyCrewSelection();
+
   document.getElementById('identity-save').onclick = async () => {
-    const name = document.getElementById('identity-name').value.trim();
-    const role = document.getElementById('identity-role').value;
+    const name = nameInput.value.trim();
+    const role = roleSelect.value;
+    const crewValue = crewSelect.value;
 
     if (!name) {
       showToast('Please enter your name');
@@ -1698,88 +1800,112 @@ function showIdentityOnboarding() {
     }
 
     const identity = { name, role };
-    if (role === 'Operator') {
-      identity.assignedRoom = document.getElementById('identity-assigned-room').value;
+
+    if (crewValue !== '__custom__' && crewValue !== '__director__') {
+      // Crew-member selection — derive assignedRooms from crew.rooms by name.
+      const crew = (trackerCrewList || []).find(c => c && c.id === crewValue);
+      if (crew) {
+        identity.crewId = crew.id;
+        const roomNames = Array.isArray(crew.rooms) ? crew.rooms.map(r => r && r.name).filter(Boolean) : [];
+        const keys = roomNames.map(findRoomKeyByName).filter(Boolean);
+        identity.assignedRooms = keys;
+        // Also mirror the first key into the legacy `assignedRoom` field so
+        // any code still reading it keeps working.
+        if (keys.length) identity.assignedRoom = keys[0];
+
+        if (keys.length === 0) {
+          showToast(`Crew member "${crew.name}" has no matching rooms in this profile — check that vMix room names match the tracker's crew assignments.`);
+        }
+      }
+    } else if (role === 'Operator') {
+      // Custom identity with Operator role — keep the single-room picker behavior.
+      const key = assignedRoomSelect.value;
+      if (key) {
+        identity.assignedRoom = key;
+        identity.assignedRooms = [key];
+      }
     }
+    // Director / Custom-non-operator: no assignedRooms / crewId.
 
     await saveIdentity(identity);
-    closeModalOverlay(modal);
+    closeModalOverlay(document.getElementById('identity-modal'));
 
-    // Now initialize the rest of the app
-    await loadProfiles();
-    await loadAuditLog();
-    updateIdentityBadge();
-    setupNavigation();
-    setupEventListeners();
-    applyRoleRestrictions();
-    switchPage('rooms');
-
-    const alwaysOnTop = await window.windowControls.isAlwaysOnTop();
-    document.getElementById('chk-always-on-top').checked = alwaysOnTop;
-
-    startShowAutoTrigger();
+    if (typeof onSave === 'function') await onSave(identity);
   };
+}
+
+function showIdentityOnboarding() {
+  const modal = document.getElementById('identity-modal');
+  openModalOverlay(modal);
+  enableModalClose(modal, () => { closeModalOverlay(modal); });
+
+  wireIdentityModal({
+    onSave: async () => {
+      // Now initialize the rest of the app
+      await loadProfiles();
+      await loadAuditLog();
+      updateIdentityBadge();
+      setupNavigation();
+      setupEventListeners();
+      applyRoleRestrictions();
+      switchPage('rooms');
+
+      const alwaysOnTop = await window.windowControls.isAlwaysOnTop();
+      document.getElementById('chk-always-on-top').checked = alwaysOnTop;
+
+      startShowAutoTrigger();
+    }
+  });
 }
 
 function showChangeIdentityModal() {
   const modal = document.getElementById('identity-modal');
   const nameInput = document.getElementById('identity-name');
   const roleSelect = document.getElementById('identity-role');
-  const roomSelector = document.getElementById('identity-room-selector');
+  const crewSelect = document.getElementById('identity-crew');
   const assignedRoomSelect = document.getElementById('identity-assigned-room');
 
-  // Pre-fill current identity
-  nameInput.value = appState.identity.name;
-  roleSelect.value = appState.identity.role;
+  // Pre-fill current identity before wiring so wireIdentityModal's initial
+  // pass sees the right values.
+  nameInput.value = appState.identity.name || '';
+  roleSelect.value = appState.identity.role || 'Director';
 
+  // Pre-select the crew dropdown if the active identity references one.
+  // Otherwise default to "Custom identity" so the name/role inputs stay free.
+  const currentCrewId = appState.identity.crewId || '__custom__';
+  // Populate the room selector with current selection for back-compat.
   if (appState.identity.role === 'Operator') {
-    roomSelector.style.display = 'block';
     const profile = getCurrentProfile();
+    const currentKey = (appState.identity.assignedRooms && appState.identity.assignedRooms[0])
+      || appState.identity.assignedRoom
+      || '';
     assignedRoomSelect.innerHTML = profile.rooms.map(r =>
-      `<option value="${r.key}"${r.key === appState.identity.assignedRoom ? ' selected' : ''}>${r.name}</option>`
+      `<option value="${r.key}"${r.key === currentKey ? ' selected' : ''}>${r.name}</option>`
     ).join('');
   }
 
   openModalOverlay(modal);
   enableModalClose(modal, () => { closeModalOverlay(modal); });
 
-  roleSelect.onchange = () => {
-    if (roleSelect.value === 'Operator') {
-      roomSelector.style.display = 'block';
-      const profile = getCurrentProfile();
-      assignedRoomSelect.innerHTML = profile.rooms.map(r =>
-        `<option value="${r.key}">${r.name}</option>`
-      ).join('');
-    } else {
-      roomSelector.style.display = 'none';
+  wireIdentityModal({
+    onSave: async () => {
+      updateIdentityBadge();
+      updateIdentityDisplay();
+      applyRoleRestrictions();
+
+      // Re-render current page to apply restrictions
+      if (appState.currentPage === 'rooms') renderRooms();
+
+      showToast('Identity updated');
     }
-  };
+  });
 
-  document.getElementById('identity-save').onclick = async () => {
-    const name = nameInput.value.trim();
-    const role = roleSelect.value;
-
-    if (!name) {
-      showToast('Please enter your name');
-      return;
-    }
-
-    const identity = { name, role };
-    if (role === 'Operator') {
-      identity.assignedRoom = assignedRoomSelect.value;
-    }
-
-    await saveIdentity(identity);
-    closeModalOverlay(modal);
-    updateIdentityBadge();
-    updateIdentityDisplay();
-    applyRoleRestrictions();
-
-    // Re-render current page to apply restrictions
-    if (appState.currentPage === 'rooms') renderRooms();
-
-    showToast('Identity updated');
-  };
+  // Apply the pre-selected crew id *after* wireIdentityModal has rendered
+  // the options — fires the change handler so Name/Role lock correctly.
+  if (Array.from(crewSelect.options).some(o => o.value === currentCrewId)) {
+    crewSelect.value = currentCrewId;
+    crewSelect.dispatchEvent(new Event('change'));
+  }
 }
 
 function updateIdentityDisplay() {
@@ -1789,10 +1915,19 @@ function updateIdentityDisplay() {
   let html = `<div style="margin-bottom: 8px;"><strong>Name:</strong> ${appState.identity.name}</div>`;
   html += `<div style="margin-bottom: 8px;"><strong>Role:</strong> ${appState.identity.role}</div>`;
 
-  if (appState.identity.role === 'Operator' && appState.identity.assignedRoom) {
+  if (appState.identity.role === 'Operator') {
     const profile = getCurrentProfile();
-    const room = profile.rooms.find(r => r.key === appState.identity.assignedRoom);
-    html += `<div><strong>Assigned Room:</strong> ${room ? room.name : 'Unknown'}</div>`;
+    const keys = (appState.identity.assignedRooms && appState.identity.assignedRooms.length)
+      ? appState.identity.assignedRooms
+      : (appState.identity.assignedRoom ? [appState.identity.assignedRoom] : []);
+    if (keys.length) {
+      const names = keys
+        .map(k => profile.rooms.find(r => r.key === k))
+        .map(r => r ? r.name : 'Unknown')
+        .join(', ');
+      const label = keys.length === 1 ? 'Assigned Room' : 'Assigned Rooms';
+      html += `<div><strong>${label}:</strong> ${names}</div>`;
+    }
   }
 
   display.innerHTML = html;
@@ -2075,6 +2210,7 @@ async function connectToFirebase() {
     await checkConcurrentOperator();
     if (!_readOnlyMode) startPresenceHeartbeat();
     subscribeToTrackerAudit();
+    subscribeToTrackerCrew();
     pushRunOfShowToTracker();
     pushRoomLocksToTracker();
 
@@ -2096,6 +2232,7 @@ function disconnectFromFirebase() {
   }
   stopPresenceHeartbeat();
   unsubscribeFromTrackerAudit();
+  unsubscribeFromTrackerCrew();
   setReadOnlyMode(false);
   trackerEvents = {};
   renderEventSelect();
@@ -2222,6 +2359,22 @@ function schedulePushVmixStatus() {
   }, 400);
 }
 
+// Shared shape for the `operator` blob written to both
+// `events/<id>/controller.operator` (presence) and `vmixStatus/<id>.operator`.
+// Only includes crewId / assignedRooms when they're populated so older
+// readers that don't know about them see the same shape they always have.
+function buildOperatorPayload(identity) {
+  const payload = {
+    name: identity.name || '',
+    role: identity.role || ''
+  };
+  if (identity.crewId) payload.crewId = identity.crewId;
+  if (Array.isArray(identity.assignedRooms) && identity.assignedRooms.length) {
+    payload.assignedRooms = identity.assignedRooms.slice();
+  }
+  return payload;
+}
+
 async function pushVmixStatusToTracker() {
   if (!appState.syncEnabled) return;
   const profile = getCurrentProfile();
@@ -2247,7 +2400,7 @@ async function pushVmixStatusToTracker() {
   try {
     await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmixStatus/${profile.trackerEventId}`).set({
       updatedAt: Date.now(),
-      operator: appState.identity ? { name: appState.identity.name || '', role: appState.identity.role || '' } : null,
+      operator: appState.identity ? buildOperatorPayload(appState.identity) : null,
       safetyLocked: !!controlsLocked,
       rooms,
       roomLocks: profile.roomLocks || {}
@@ -2280,7 +2433,7 @@ function startPresenceHeartbeat() {
     const payload = {
       commanderId: COMMANDER_ID,
       operator: appState.identity
-        ? { name: appState.identity.name || '', role: appState.identity.role || '' }
+        ? buildOperatorPayload(appState.identity)
         : { name: '', role: '' },
       lastHeartbeat: Date.now(),
       safetyLocked: !!controlsLocked
@@ -2441,6 +2594,68 @@ function unsubscribeFromTrackerAudit() {
     _trackerAuditRef = null;
   }
   appState.trackerAuditLog = [];
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tracker crew subscription
+// ────────────────────────────────────────────────────────────────────────
+// The Crew Tracker's Setup page maintains a crew list at
+//   events/<eventId>/config/crew = [ { id, name, rooms: [{ id, name }] } ]
+// Commander subscribes when sync is connected + an event is linked so the
+// identity modal can surface a "Sign in as <crew member>" shortcut. Matching
+// of a crew member's rooms to the Commander profile is by *name*
+// (case-sensitive exact match) — the Director is expected to keep names
+// aligned between the two apps.
+let trackerCrewList = [];
+let _trackerCrewRef = null;
+
+function subscribeToTrackerCrew() {
+  unsubscribeFromTrackerCrew();
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _trackerCrewRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/crew`);
+  _trackerCrewRef.on('value', (snap) => {
+    const val = snap.val();
+    // Tracker stores crew as an array; tolerate object-shape writes too.
+    if (Array.isArray(val)) {
+      trackerCrewList = val.filter(Boolean);
+    } else if (val && typeof val === 'object') {
+      trackerCrewList = Object.values(val).filter(Boolean);
+    } else {
+      trackerCrewList = [];
+    }
+    // If the identity modal is open, re-render only its crew dropdown —
+    // avoid blowing away a name the user is mid-typing.
+    const modal = document.getElementById('identity-modal');
+    if (modal && modal.classList.contains('is-open') && typeof renderTrackerCrewDropdown === 'function') {
+      renderTrackerCrewDropdown();
+    }
+  }, (error) => {
+    console.error('Tracker crew subscription error:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'subscribeToTrackerCrew: ' + (error && error.message || error), stack: error && error.stack || '', context: 'subscribeToTrackerCrew' });
+    }
+  });
+}
+
+function unsubscribeFromTrackerCrew() {
+  if (_trackerCrewRef) {
+    try { _trackerCrewRef.off(); } catch (_) { /* ignore */ }
+    _trackerCrewRef = null;
+  }
+  trackerCrewList = [];
+}
+
+// Look up a Commander profile room key by display name (case-sensitive exact
+// match). Used when resolving a tracker crew member's room list into the
+// internal room-key array stored on `identity.assignedRooms`.
+function findRoomKeyByName(name) {
+  if (!name) return null;
+  const profile = getCurrentProfile();
+  const match = (profile.rooms || []).find(r => r.name === name);
+  return match ? match.key : null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
