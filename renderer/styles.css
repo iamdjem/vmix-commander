@@ -172,10 +172,11 @@ body {
   transform: translateX(16px);
 }
 
-/* Locked state — disable all vMix controls */
-.controls-locked .fn-toggle,
-.controls-locked .btn-start-all,
-.controls-locked .btn-stop-all {
+/* Locked state — disables ONLY the All Rooms master card's two buttons.
+ * Individual room cards stay live so the operator can keep using them.
+ * The safety lock specifically prevents accidental "all rooms" stops mid-event. */
+.controls-locked .all-rooms-card .btn-start-all,
+.controls-locked .all-rooms-card .btn-stop-all {
   pointer-events: none;
   opacity: 0.35;
   filter: grayscale(0.5);

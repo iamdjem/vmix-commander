@@ -673,9 +673,11 @@ function renderRooms() {
     return;
   }
 
-  // Show an All Rooms master card when there are 2+ rooms (Directors only)
-  const isOperator = appState.identity && appState.identity.role === 'Operator';
-  if (roomsToShow.length >= 2 && !isOperator) {
+  // Show an All Rooms master card only for Directors when there are 2+
+  // rooms. Operators are scoped to their own room; Observers are
+  // read-only and have no use for the master controls.
+  const isDirector = appState.identity && appState.identity.role === 'Director';
+  if (roomsToShow.length >= 2 && isDirector) {
     container.appendChild(createAllRoomsCard(roomsToShow));
   }
 
@@ -711,10 +713,13 @@ function createAllRoomsCard(rooms) {
   nameWrap.appendChild(count);
   header.appendChild(nameWrap);
 
-  // Safety lock toggle (top right)
+  // Safety lock toggle (top right) — gates ONLY the All Rooms master
+  // buttons. Individual room cards stay live so the operator can keep
+  // running per-room actions while the global "all rooms" controls are
+  // safely disabled mid-event.
   const lockWrap = document.createElement('label');
   lockWrap.className = 'safety-lock' + (controlsLocked ? ' locked' : '');
-  lockWrap.title = 'Lock all room controls to prevent accidental taps';
+  lockWrap.title = 'Lock the START / STOP ALL ROOMS buttons. Per-room cards stay live.';
   lockWrap.innerHTML = `
     <span class="safety-lock-label">${controlsLocked ? 'LOCKED' : 'LIVE'}</span>
     <span class="safety-lock-switch">
@@ -753,6 +758,10 @@ function createAllRoomsCard(rooms) {
 async function allRoomsAction(rooms, action) {
   if (_readOnlyMode) {
     showToast('Read-only mode — vMix actions disabled');
+    return;
+  }
+  if (controlsLocked) {
+    showToast('All Rooms is locked — toggle LIVE to enable');
     return;
   }
 
