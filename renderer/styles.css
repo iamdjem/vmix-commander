@@ -1471,6 +1471,112 @@ body.modal-open {
   overflow-y: auto;
 }
 
+/* ─── Errors panel (Log page) ─── */
+.errors-panel {
+  margin-top: var(--sp-4);
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.errors-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--t2);
+  list-style: none;
+}
+
+.errors-summary::-webkit-details-marker { display: none; }
+
+.errors-summary::before {
+  content: '▸';
+  display: inline-block;
+  color: var(--t3);
+  transition: transform 0.2s ease;
+  font-size: var(--fs-sm);
+}
+
+.errors-panel[open] .errors-summary::before {
+  transform: rotate(90deg);
+}
+
+.errors-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  display: inline-block;
+}
+
+.errors-count {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--t3);
+  font-weight: 500;
+}
+
+.errors-container {
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line2);
+}
+
+.error-entry {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+
+.error-entry:last-child { border-bottom: none; }
+
+.error-entry-header {
+  display: flex;
+  gap: var(--sp-2);
+  color: var(--t3);
+  font-size: var(--fs-xs);
+  margin-bottom: var(--sp-1);
+}
+
+.error-entry-context {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.error-entry-message {
+  color: var(--t1);
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-sm);
+}
+
+.error-entry-stack {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--s1);
+  border-radius: var(--r-sm);
+  color: var(--t2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.error-entry-empty {
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--t3);
+  font-size: var(--fs-sm);
+}
+
 /* ─── Shared Empty State ─── */
 .empty-state,
 .log-empty,

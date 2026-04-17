@@ -27,6 +27,7 @@ let appState = {
   eventCode: '',
   auditLog: [],
   trackerAuditLog: [],   // mirror of the event's Firebase audit tree (most recent 500)
+  trackerErrors: [],     // mirror of the event's Firebase errors tree (most recent 100)
   showTrackerAudit: true,
   logFilters: { room: '', user: '', action: '' }
 };
@@ -407,6 +408,7 @@ function switchPage(page) {
 
   if (page === 'log') {
     renderAuditLog();
+    renderErrorsPanel();
   }
 
   if (page === 'settings') {
@@ -545,6 +547,7 @@ function setupEventListeners() {
       // Rebuild event-scoped subscriptions / presence / initial pushes.
       stopPresenceHeartbeat();
       unsubscribeFromTrackerAudit();
+      unsubscribeFromTrackerErrors();
       unsubscribeFromTrackerCrew();
       if (eventId) {
         await pushRoomsToTrackerEvent();
@@ -553,6 +556,7 @@ function setupEventListeners() {
         await checkConcurrentOperator();
         if (!_readOnlyMode) startPresenceHeartbeat();
         subscribeToTrackerAudit();
+        subscribeToTrackerErrors();
         subscribeToTrackerCrew();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
@@ -2210,6 +2214,7 @@ async function connectToFirebase() {
     await checkConcurrentOperator();
     if (!_readOnlyMode) startPresenceHeartbeat();
     subscribeToTrackerAudit();
+    subscribeToTrackerErrors();
     subscribeToTrackerCrew();
     pushRunOfShowToTracker();
     pushRoomLocksToTracker();
@@ -2232,6 +2237,7 @@ function disconnectFromFirebase() {
   }
   stopPresenceHeartbeat();
   unsubscribeFromTrackerAudit();
+  unsubscribeFromTrackerErrors();
   unsubscribeFromTrackerCrew();
   setReadOnlyMode(false);
   trackerEvents = {};
@@ -2594,6 +2600,99 @@ function unsubscribeFromTrackerAudit() {
     _trackerAuditRef = null;
   }
   appState.trackerAuditLog = [];
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tracker errors subscription
+// ────────────────────────────────────────────────────────────────────────
+// Error telemetry is written to events/<eventId>/errors/<pushId> by the
+// global handlers at the top of this file. The Log page surfaces these
+// in a collapsible "Errors" section so the operator can spot crashes
+// without opening the Firebase console.
+let _trackerErrorsRef = null;
+
+function subscribeToTrackerErrors() {
+  unsubscribeFromTrackerErrors();
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _trackerErrorsRef = firebaseDb
+    .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/errors`)
+    .limitToLast(100);
+
+  _trackerErrorsRef.on('value', (snap) => {
+    const val = snap.val() || {};
+    appState.trackerErrors = Object.keys(val).map(id => ({ id, ...val[id] }));
+    if (appState.currentPage === 'log') renderErrorsPanel();
+  }, (error) => {
+    console.error('Tracker errors subscription error:', error);
+  });
+}
+
+function unsubscribeFromTrackerErrors() {
+  if (_trackerErrorsRef) {
+    try { _trackerErrorsRef.off(); } catch (_) { /* ignore */ }
+    _trackerErrorsRef = null;
+  }
+  appState.trackerErrors = [];
+}
+
+function renderErrorsPanel() {
+  const panel = document.getElementById('errors-panel');
+  const container = document.getElementById('errors-container');
+  const countEl = document.getElementById('errors-count');
+  if (!panel || !container || !countEl) return;
+
+  const errors = (appState.trackerErrors || []).slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+  if (errors.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = '';
+  countEl.textContent = errors.length;
+
+  container.innerHTML = '';
+  errors.forEach(err => {
+    const row = document.createElement('div');
+    row.className = 'error-entry';
+
+    const header = document.createElement('div');
+    header.className = 'error-entry-header';
+    const when = new Date(err.timestamp || 0).toLocaleString();
+    const commanderIdShort = (err.commanderId || '').slice(0, 8);
+    const identityName = err.identity && err.identity.name ? err.identity.name : 'unknown';
+    const ctx = err.context ? `<span class="error-entry-context">${escapeForHtml(err.context)}</span>` : '';
+    header.innerHTML = `<span>${escapeForHtml(when)}</span>${ctx ? ' · ' + ctx : ''} · <span>${escapeForHtml(identityName)}</span>` + (commanderIdShort ? ` · <span>${escapeForHtml(commanderIdShort)}</span>` : '');
+
+    const msg = document.createElement('div');
+    msg.className = 'error-entry-message';
+    msg.textContent = err.message || '(no message)';
+
+    row.appendChild(header);
+    row.appendChild(msg);
+
+    if (err.stack) {
+      const stack = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.style.cssText = 'color: var(--t3); cursor: pointer; font-size: var(--fs-xs); margin-top: var(--sp-1);';
+      summary.textContent = 'Stack trace';
+      const pre = document.createElement('pre');
+      pre.className = 'error-entry-stack';
+      pre.textContent = err.stack;
+      stack.appendChild(summary);
+      stack.appendChild(pre);
+      row.appendChild(stack);
+    }
+
+    container.appendChild(row);
+  });
+}
+
+function escapeForHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -3067,7 +3166,6 @@ function startShowAutoTrigger() {
   // Check every 30 seconds
   showAutoTriggerInterval = setInterval(() => {
     if (!appState.identity || appState.identity.role !== 'Director') return;
-    if (appState.currentPage !== 'show') return;
 
     const runOfShow = getRunOfShow();
     const now = new Date();

@@ -91,6 +91,15 @@
         </select>
       </div>
       <div id="log-container" class="log-container" role="table" aria-label="Audit log entries"></div>
+
+      <details id="errors-panel" class="errors-panel" style="display:none;">
+        <summary class="errors-summary">
+          <span class="errors-dot"></span>
+          <span>Errors</span>
+          <span id="errors-count" class="errors-count">0</span>
+        </summary>
+        <div id="errors-container" class="errors-container" role="list" aria-label="Error telemetry entries"></div>
+      </details>
     </div>
 
     <!-- Tunnel Page -->
