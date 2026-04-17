@@ -1,6 +1,6 @@
 {
   "name": "vmix-commander",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Multi-venue vMix control panel for live events",
   "main": "main.js",
   "scripts": {
