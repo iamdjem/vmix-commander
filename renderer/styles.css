@@ -97,13 +97,16 @@ body {
 
 
 /* All Rooms Master Card — visually distinct so it's harder to confuse for
- * a per-room card. Uses a warning-tone gold/amber (matched 1:1 to the
- * tracker's master card) rather than the brand orange so it reads as a
- * "different kind of control" — both apps share the same accent here. */
+ * a per-room card. Uses a warning-tone gold/amber rather than the brand
+ * orange so it reads as a "different kind of control".
+ *
+ * Gradient / border / shadow values are matched 1:1 to the tracker's
+ * #vmix-all-row inline styles so both apps render identically. If you
+ * change anything here, mirror it in kubecon-tracker/index.html. */
 .all-rooms-card {
-  background: linear-gradient(135deg, rgba(212, 168, 67, 0.18), rgba(212, 168, 67, 0.06));
-  border-color: rgba(212, 168, 67, 0.55);
-  box-shadow: 0 0 0 1px rgba(212, 168, 67, 0.18), 0 4px 20px rgba(212, 168, 67, 0.08);
+  background: linear-gradient(135deg, rgba(212, 168, 67, 0.16), rgba(212, 168, 67, 0.04));
+  border-color: rgba(212, 168, 67, 0.5);
+  box-shadow: 0 0 0 1px rgba(212, 168, 67, 0.15), 0 4px 20px rgba(212, 168, 67, 0.06);
   grid-column: 1 / -1;
   margin-bottom: var(--sp-4);
 }
