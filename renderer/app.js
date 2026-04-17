@@ -771,7 +771,8 @@ async function allRoomsAction(rooms, action) {
     return;
   }
 
-  // Destructive STOP ALL requires explicit confirmation. START ALL does not.
+  // Both START and STOP All Rooms require confirmation — these affect every
+  // room simultaneously and an accidental tap mid-event has real cost.
   if (action === 'stop') {
     showConfirm({
       title: 'Stop all rooms?',
@@ -779,6 +780,17 @@ async function allRoomsAction(rooms, action) {
       confirmLabel: 'Stop all rooms',
       danger: true,
       onConfirm: () => runAllRoomsAction(withIp, 'stop')
+    });
+    return;
+  }
+
+  if (action === 'start') {
+    showConfirm({
+      title: 'Start all rooms?',
+      message: `This will start recording, streaming, and MultiCorder on all ${withIp.length} rooms. Continue?`,
+      confirmLabel: 'Start all rooms',
+      danger: false,
+      onConfirm: () => runAllRoomsAction(withIp, 'start')
     });
     return;
   }
