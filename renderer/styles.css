@@ -102,8 +102,12 @@ body {
  *
  * Gradient / border / shadow values are matched 1:1 to the tracker's
  * #vmix-all-row inline styles so both apps render identically. If you
- * change anything here, mirror it in kubecon-tracker/index.html. */
-.all-rooms-card {
+ * change anything here, mirror it in kubecon-tracker/index.html.
+ *
+ * Selector uses TWO classes (.room-card.all-rooms-card) to outrank the
+ * later .room-card { background: var(--s2); ... } block — without this
+ * the master card silently falls back to the plain card background. */
+.room-card.all-rooms-card {
   background: linear-gradient(135deg, rgba(212, 168, 67, 0.16), rgba(212, 168, 67, 0.04));
   border-color: rgba(212, 168, 67, 0.5);
   box-shadow: 0 0 0 1px rgba(212, 168, 67, 0.15), 0 4px 20px rgba(212, 168, 67, 0.06);
