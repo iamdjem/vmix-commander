@@ -703,7 +703,7 @@ function createAllRoomsCard(rooms) {
 
   const name = document.createElement('div');
   name.className = 'room-name';
-  name.textContent = 'All Rooms';
+  name.innerHTML = 'All Rooms <span class="master-badge">MASTER</span>';
 
   const count = document.createElement('span');
   count.className = 'room-health offline';

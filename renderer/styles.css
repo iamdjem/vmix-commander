@@ -96,11 +96,30 @@ body {
 
 
 
-/* All Rooms Master Card */
+/* All Rooms Master Card — visually distinct so it's harder to confuse for
+ * a per-room card. Stronger orange tint, accented border, glow, and extra
+ * bottom margin to create a clear gap before the individual room cards. */
 .all-rooms-card {
-  background: linear-gradient(135deg, rgba(244, 105, 42, 0.08), rgba(244, 105, 42, 0.03));
-  border-color: rgba(244, 105, 42, 0.3);
+  background: linear-gradient(135deg, rgba(244, 105, 42, 0.18), rgba(244, 105, 42, 0.06));
+  border-color: rgba(244, 105, 42, 0.55);
+  box-shadow: 0 0 0 1px rgba(244, 105, 42, 0.18), 0 4px 20px rgba(244, 105, 42, 0.08);
   grid-column: 1 / -1;
+  margin-bottom: var(--sp-4);
+}
+
+/* Inline "MASTER" badge that sits next to the All Rooms title. */
+.master-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+  background: rgba(244, 105, 42, 0.12);
+  border: 1px solid rgba(244, 105, 42, 0.35);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  margin-left: var(--sp-2);
+  vertical-align: middle;
 }
 
 /* Safety Lock Toggle */
