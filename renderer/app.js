@@ -125,7 +125,11 @@ function renderTunnelQr(url) {
 }
 
 function updateTunnelPage(status) {
+  const prevUrl = _currentTunnelUrl;
   _currentTunnelUrl = status.url || '';
+  if (_currentTunnelUrl !== prevUrl && typeof pushProxyUrlToTracker === 'function') {
+    pushProxyUrlToTracker();
+  }
 
   // Update tunnel page indicators
   const dot   = document.getElementById('tpage-tunnel-indicator');
@@ -1864,14 +1868,19 @@ async function connectToFirebase() {
     // Listen to the tracker's events collection
     if (!trackerEventsRef) {
       trackerEventsRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events`);
-      trackerEventsRef.on('value', async (snap) => {
+      trackerEventsRef.on('value', (snap) => {
         trackerEvents = snap.val() || {};
         renderEventSelect();
         updateSyncStatus('🟢 Connected', true);
-        // Push rooms to linked event on each sync
-        await pushRoomsToTrackerEvent();
       });
     }
+
+    // Initial push of rooms + proxy URL after connecting.
+    // Previously this ran on every snapshot, which created a feedback loop
+    // (writing updatedAt re-triggered the snapshot listener) and caused the
+    // event dropdown to close itself mid-click.
+    await pushRoomsToTrackerEvent();
+    await pushProxyUrlToTracker();
 
     if (syncCheckbox) syncCheckbox.disabled = false;
   } catch (error) {
@@ -1898,7 +1907,11 @@ function updateSyncStatus(message, connected) {
   statusEl.className = 'sync-status ' + (connected ? 'sync-connected' : 'sync-disconnected');
 }
 
-// Populate the event dropdown with live events from the tracker
+// Populate the event dropdown with live events from the tracker.
+// Skip rebuild when the option set hasn't changed — re-assigning innerHTML
+// closes an open dropdown and drops focus, which was making selection
+// impossible while snapshots were arriving.
+let _lastEventSelectSig = '';
 function renderEventSelect() {
   const select = document.getElementById('sync-event-select');
   if (!select) return;
@@ -1912,6 +1925,10 @@ function renderEventSelect() {
       if (a.archived !== b.archived) return a.archived ? 1 : -1;
       return (b.updatedAt || 0) - (a.updatedAt || 0);
     });
+
+  const sig = currentLinkedId + '|' + events.map(ev => `${ev.id}:${ev.name || ''}:${ev.archived ? 1 : 0}`).join(',');
+  if (sig === _lastEventSelectSig) return;
+  _lastEventSelectSig = sig;
 
   select.innerHTML = '<option value="">— Not linked —</option>' +
     events.map(ev => {
@@ -1940,6 +1957,24 @@ async function pushRoomsToTrackerEvent() {
 async function pushToFirebase() {
   if (!appState.syncEnabled) return;
   await pushRoomsToTrackerEvent();
+}
+
+// Publish the Cloudflare tunnel URL so the tracker (served over HTTPS) can
+// reach vMix (HTTP) via the commander's /vmix-proxy bridge. Without this,
+// the tracker falls back to direct HTTP and gets blocked by mixed-content,
+// showing every room's REC/STREAM/MULTI as OFF.
+let _lastPushedProxyUrl = '';
+async function pushProxyUrlToTracker() {
+  if (!appState.syncEnabled) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  const url = _currentTunnelUrl || '';
+  if (url === _lastPushedProxyUrl) return;
+  try {
+    await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmix_proxy_url`).set(url || null);
+    _lastPushedProxyUrl = url;
+  } catch (error) {
+    console.error('Failed to push proxy URL to tracker:', error);
+  }
 }
 
 // ========================================
