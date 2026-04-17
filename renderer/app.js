@@ -1334,10 +1334,13 @@ async function refreshAllStatus() {
 function startStatusRefresh() {
   stopStatusRefresh();
   startRecordingTimers();
+  // Poll vMix on every tick regardless of which Commander tab is active.
+  // The status push to Firebase is what keeps the tracker's "Commander
+  // online" indicator fresh — gating polling on the Rooms tab caused the
+  // tracker to falsely show "Commander offline" any time the operator
+  // switched to Settings, Log, or Show.
   statusRefreshInterval = setInterval(() => {
-    if (appState.currentPage === 'rooms') {
-      refreshAllStatus();
-    }
+    refreshAllStatus();
   }, 8000);
 }
 
