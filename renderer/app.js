@@ -522,6 +522,13 @@ function setupEventListeners() {
     showChangeIdentityModal();
   });
 
+  // Re-match rooms — re-resolves assignedRooms from the current tracker
+  // crew roster and persists. Only relevant when bound to a crew member.
+  const btnRematch = document.getElementById('btn-rematch-rooms');
+  if (btnRematch) {
+    btnRematch.addEventListener('click', () => { rematchAssignedRooms(); });
+  }
+
   // Cloud sync checkbox
   document.getElementById('chk-sync-enabled').addEventListener('change', async (e) => {
     appState.syncEnabled = e.target.checked;
@@ -650,13 +657,12 @@ function renderRooms() {
 
   let roomsToShow = profile.rooms;
 
-  // Apply Operator filter: show only assigned room(s). Newer identities carry
-  // `assignedRooms` (string[] of room keys); older ones only have a single
-  // `assignedRoom`. Fall back to that for back-compat.
+  // Apply Operator filter: show only assigned room(s). Resolved live from
+  // the tracker's crew roster when identity.crewId is set, so a rename
+  // anywhere takes effect on the next render. Falls back to stored values
+  // for custom identities.
   if (appState.identity && appState.identity.role === 'Operator') {
-    const keys = appState.identity.assignedRooms && appState.identity.assignedRooms.length
-      ? appState.identity.assignedRooms
-      : (appState.identity.assignedRoom ? [appState.identity.assignedRoom] : []);
+    const keys = effectiveAssignedRooms(appState.identity);
     if (keys.length) {
       roomsToShow = profile.rooms.filter(r => keys.includes(r.key));
     }
@@ -1921,9 +1927,9 @@ function updateIdentityDisplay() {
 
   if (appState.identity.role === 'Operator') {
     const profile = getCurrentProfile();
-    const keys = (appState.identity.assignedRooms && appState.identity.assignedRooms.length)
-      ? appState.identity.assignedRooms
-      : (appState.identity.assignedRoom ? [appState.identity.assignedRoom] : []);
+    // Use the live-resolved assignedRooms so renames in the tracker crew
+    // config show up here without requiring a re-pick.
+    const keys = effectiveAssignedRooms(appState.identity);
     if (keys.length) {
       const names = keys
         .map(k => profile.rooms.find(r => r.key === k))
@@ -1932,9 +1938,20 @@ function updateIdentityDisplay() {
       const label = keys.length === 1 ? 'Assigned Room' : 'Assigned Rooms';
       html += `<div><strong>${label}:</strong> ${names}</div>`;
     }
+    if (appState.identity.crewId) {
+      const crew = (trackerCrewList || []).find(c => c && c.id === appState.identity.crewId);
+      const crewLabel = crew ? crew.name : '(crew not found)';
+      html += `<div style="margin-top: 4px; color: var(--t3); font-size: var(--fs-sm);"><strong>Bound to crew:</strong> ${crewLabel}</div>`;
+    }
   }
 
   display.innerHTML = html;
+
+  // Show "Re-match rooms" button only when identity is bound to a crew member.
+  const btnRematch = document.getElementById('btn-rematch-rooms');
+  if (btnRematch) {
+    btnRematch.style.display = appState.identity.crewId ? '' : 'none';
+  }
 }
 
 function applyRoleRestrictions() {
@@ -2375,9 +2392,11 @@ function buildOperatorPayload(identity) {
     role: identity.role || ''
   };
   if (identity.crewId) payload.crewId = identity.crewId;
-  if (Array.isArray(identity.assignedRooms) && identity.assignedRooms.length) {
-    payload.assignedRooms = identity.assignedRooms.slice();
-  }
+  // Send the LIVE assignedRooms (re-resolved from the current crew roster
+  // when bound) so the tracker's "Controlled by" banner and presence node
+  // reflect what the operator actually sees, not what was cached at save.
+  const live = effectiveAssignedRooms(identity);
+  if (live.length) payload.assignedRooms = live;
   return payload;
 }
 
@@ -2739,6 +2758,10 @@ function subscribeToTrackerCrew() {
     if (modal && modal.classList.contains('is-open') && typeof renderTrackerCrewDropdown === 'function') {
       renderTrackerCrewDropdown();
     }
+    // assignedRooms is now resolved live from this list, so a crew-config
+    // change (renamed room, added member) should re-render dependent views.
+    if (appState.currentPage === 'rooms') renderRooms();
+    if (appState.currentPage === 'settings') updateIdentityDisplay();
   }, (error) => {
     console.error('Tracker crew subscription error:', error);
     if (typeof pushErrorToTracker === 'function') {
@@ -2765,6 +2788,53 @@ function findRoomKeyByName(name) {
   const profile = getCurrentProfile();
   const match = (profile.rooms || []).find(r => String(r.name || '').trim().toLowerCase() === norm);
   return match ? match.key : null;
+}
+
+// Live room resolution. When an identity is bound to a tracker crew member
+// (identity.crewId is set), re-derive assignedRooms from the current crew
+// roster on every read — so renaming a vMix room or fixing a typo in the
+// crew config takes effect immediately, no re-pick required. For custom
+// identities (no crewId), use the stored assignedRooms / assignedRoom.
+function effectiveAssignedRooms(identity) {
+  if (!identity) return [];
+  if (identity.crewId && Array.isArray(trackerCrewList) && trackerCrewList.length) {
+    const crew = trackerCrewList.find(c => c && c.id === identity.crewId);
+    if (crew && Array.isArray(crew.rooms)) {
+      const live = crew.rooms
+        .map(r => r && r.name)
+        .filter(Boolean)
+        .map(findRoomKeyByName)
+        .filter(Boolean);
+      // Use live result if any matches; otherwise fall back to stored
+      // assignedRooms (avoids snapping to "no rooms" mid-session if the
+      // crew list temporarily disappears or the names momentarily mismatch).
+      if (live.length) return live;
+    }
+  }
+  if (Array.isArray(identity.assignedRooms) && identity.assignedRooms.length) {
+    return identity.assignedRooms.slice();
+  }
+  if (identity.assignedRoom) return [identity.assignedRoom];
+  return [];
+}
+
+// Manual re-trigger: re-resolves assignedRooms from the current crew roster
+// and persists the result. Useful when a Director just fixed a room name
+// in either app and wants to see the effect immediately on a saved identity.
+async function rematchAssignedRooms() {
+  const id = appState.identity;
+  if (!id) { showToast('No identity set'); return; }
+  if (!id.crewId) { showToast('Not bound to a crew member — pick one in Change Identity first'); return; }
+  const crew = (trackerCrewList || []).find(c => c && c.id === id.crewId);
+  if (!crew) { showToast('Crew member not found in tracker — sync to an event first'); return; }
+  const crewRoomNames = (Array.isArray(crew.rooms) ? crew.rooms : [])
+    .map(r => r && r.name).filter(Boolean);
+  const matchedKeys = crewRoomNames.map(findRoomKeyByName).filter(Boolean);
+  id.assignedRooms = matchedKeys;
+  await saveIdentity(id);
+  if (appState.currentPage === 'rooms') renderRooms();
+  if (appState.currentPage === 'settings') renderSettings();
+  showToast(`Re-matched: ${matchedKeys.length} of ${crewRoomNames.length} crew rooms`);
 }
 
 // ────────────────────────────────────────────────────────────────────────
