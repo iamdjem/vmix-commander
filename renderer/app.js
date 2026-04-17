@@ -127,7 +127,7 @@ function startRecordingTimers() {
       const roomKey = key.slice(prefix.length);
       const el = document.getElementById(`rec-timer-${roomKey}`);
       if (el) {
-        el.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - startTime)}`;
+        el.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - startTime)}`;
         el.classList.add('active');
       }
     }
@@ -957,7 +957,7 @@ function createRoomCard(room) {
   timerEl.id = `rec-timer-${room.key}`;
   if (recordingStartTimes[scopedKey(room.key)]) {
     timerEl.classList.add('active');
-    timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[scopedKey(room.key)])}`;
+    timerEl.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - recordingStartTimes[scopedKey(room.key)])}`;
   }
 
   nameWrap.appendChild(name);
@@ -1274,7 +1274,7 @@ function updateRoomCard(roomKey) {
     const sk = scopedKey(roomKey);
     if (recordingStartTimes[sk]) {
       timerEl.classList.add('active');
-      timerEl.innerHTML = `<span class="rec-label">REC</span> ${formatDuration(Date.now() - recordingStartTimes[sk])}`;
+      timerEl.innerHTML = `<span class="rec-label">Recording</span> ${formatDuration(Date.now() - recordingStartTimes[sk])}`;
     } else {
       timerEl.classList.remove('active');
       timerEl.innerHTML = '';
@@ -2924,10 +2924,18 @@ function subscribeToTrackerSafetyLock() {
   _trackerSafetyLockRef.on('value', (snap) => {
     const remote = snap.val();
     if (typeof remote !== 'boolean') return;  // initial empty state — ignore
-    setControlsLocked(remote);  // no-op short-circuits if already matching
-    if (appState.currentPage === 'rooms') renderRooms();
+    if (controlsLocked === remote) return;    // already in sync — no-op + no re-render
+    // Adopt the remote state. setControlsLocked handles localStorage + body
+    // class + downstream pushes; we always re-render so the All Rooms toggle
+    // checkbox visibly flips even when the operator isn't on the Rooms tab
+    // (the next visit would otherwise show the wrong toggle position).
+    setControlsLocked(remote);
+    renderRooms();
   }, (error) => {
     console.error('Tracker safetyLock subscription error:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'subscribeToTrackerSafetyLock: ' + (error && error.message || error), stack: error && error.stack || '', context: 'subscribeToTrackerSafetyLock' });
+    }
   });
 }
 
