@@ -2760,8 +2760,10 @@ function unsubscribeFromTrackerCrew() {
 // internal room-key array stored on `identity.assignedRooms`.
 function findRoomKeyByName(name) {
   if (!name) return null;
+  const norm = String(name).trim().toLowerCase();
+  if (!norm) return null;
   const profile = getCurrentProfile();
-  const match = (profile.rooms || []).find(r => r.name === name);
+  const match = (profile.rooms || []).find(r => String(r.name || '').trim().toLowerCase() === norm);
   return match ? match.key : null;
 }
 
