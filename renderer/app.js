@@ -2381,6 +2381,16 @@ function buildOperatorPayload(identity) {
   return payload;
 }
 
+// Always returns an object with `name` + `role` children so that Firebase
+// security rules (which require identity.hasChildren()) never reject a
+// write just because identity hasn't loaded yet — e.g. errors that fire
+// during early boot, or audit entries logged before onboarding completes.
+function identityOrPlaceholder() {
+  return appState.identity
+    ? buildOperatorPayload(appState.identity)
+    : { name: 'unknown', role: 'Observer' };
+}
+
 async function pushVmixStatusToTracker() {
   if (!appState.syncEnabled) return;
   const profile = getCurrentProfile();
@@ -2438,9 +2448,7 @@ function startPresenceHeartbeat() {
     if (!_presenceRef) return;
     const payload = {
       commanderId: COMMANDER_ID,
-      operator: appState.identity
-        ? buildOperatorPayload(appState.identity)
-        : { name: '', role: '' },
+      operator: identityOrPlaceholder(),
       lastHeartbeat: Date.now(),
       safetyLocked: !!controlsLocked
     };
@@ -2561,7 +2569,7 @@ async function pushAuditToTracker(room, action, result) {
     const entry = {
       timestamp: Date.now(),
       source: 'commander',
-      identity: appState.identity || null,
+      identity: identityOrPlaceholder(),
       action,
       room,
       result
@@ -2838,7 +2846,7 @@ function pushErrorToTracker(payload) {
       timestamp: now,
       source: 'commander',
       commanderId: COMMANDER_ID,
-      identity: appState.identity || null,
+      identity: identityOrPlaceholder(),
       message: msg,
       stack,
       context
