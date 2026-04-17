@@ -547,6 +547,12 @@ function renderRooms() {
     return;
   }
 
+  // Show an All Rooms master card when there are 2+ rooms (Directors only)
+  const isOperator = appState.identity && appState.identity.role === 'Operator';
+  if (roomsToShow.length >= 2 && !isOperator) {
+    container.appendChild(createAllRoomsCard(roomsToShow));
+  }
+
   roomsToShow.forEach(room => {
     const card = createRoomCard(room);
     container.appendChild(card);
@@ -554,6 +560,92 @@ function renderRooms() {
 
   // Fetch initial status
   refreshAllStatus();
+}
+
+// All-rooms master card — fires actions across every room
+function createAllRoomsCard(rooms) {
+  const card = document.createElement('div');
+  card.className = 'room-card all-rooms-card';
+
+  const header = document.createElement('div');
+  header.className = 'room-header';
+
+  const nameWrap = document.createElement('div');
+  nameWrap.className = 'room-name-wrap';
+
+  const name = document.createElement('div');
+  name.className = 'room-name';
+  name.textContent = 'All Rooms';
+
+  const count = document.createElement('span');
+  count.className = 'room-health offline';
+  count.innerHTML = `<span class="room-health-label">${rooms.length} rooms</span>`;
+
+  nameWrap.appendChild(name);
+  nameWrap.appendChild(count);
+  header.appendChild(nameWrap);
+
+  const masterControls = document.createElement('div');
+  masterControls.className = 'master-controls';
+
+  const startAllBtn = document.createElement('button');
+  startAllBtn.className = 'btn btn-start-all';
+  startAllBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="2,0 12,6 2,12"/></svg><span>START ALL ROOMS</span>';
+  startAllBtn.onclick = () => allRoomsAction(rooms, 'start');
+
+  const stopAllBtn = document.createElement('button');
+  stopAllBtn.className = 'btn btn-stop-all';
+  stopAllBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="0" y="0" width="10" height="10" rx="1.5"/></svg><span>STOP ALL ROOMS</span>';
+  stopAllBtn.onclick = () => allRoomsAction(rooms, 'stop');
+
+  masterControls.appendChild(startAllBtn);
+  masterControls.appendChild(stopAllBtn);
+
+  card.appendChild(header);
+  card.appendChild(masterControls);
+  return card;
+}
+
+async function allRoomsAction(rooms, action) {
+  const withIp = rooms.filter(r => r.ip);
+  if (withIp.length === 0) {
+    showToast('No rooms have an IP configured');
+    return;
+  }
+
+  if (!confirm(`${action === 'start' ? 'Start' : 'Stop'} recording/streaming/multicorder on all ${withIp.length} rooms?`)) {
+    return;
+  }
+
+  showToast(`${action === 'start' ? 'Starting' : 'Stopping'} ${withIp.length} rooms…`);
+
+  const fns = action === 'start'
+    ? ['StartRecording', 'StartStreaming', 'StartMultiCorder']
+    : ['StopRecording', 'StopStreaming', 'StopMultiCorder'];
+
+  const results = await Promise.all(
+    withIp.flatMap(room => fns.map(fn =>
+      window.vmix.call(room.ip, fn)
+        .then(res => ({ ...res, room: room.name }))
+        .catch(err => ({ ok: false, error: err.message, room: room.name }))
+    ))
+  );
+
+  const okCount = results.filter(r => r.ok).length;
+  const totalCount = results.length;
+  const actionLabel = action === 'start' ? 'START ALL' : 'STOP ALL';
+
+  // One audit entry per room
+  for (const room of withIp) {
+    const roomResults = results.filter(r => r.room === room.name);
+    const allOk = roomResults.every(r => r.ok);
+    await appendAuditLog(room.name, actionLabel + ' (all rooms)', allOk ? 'ok' : 'fail');
+  }
+
+  showToast(okCount === totalCount ? `✓ All rooms done` : `✗ ${okCount}/${totalCount} OK`);
+
+  // Refresh status for all rooms after a short delay
+  setTimeout(() => refreshAllStatus(), 1200);
 }
 
 // Create room card

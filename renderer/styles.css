@@ -96,6 +96,28 @@ body {
 
 
 
+/* All Rooms Master Card */
+.all-rooms-card {
+  background: linear-gradient(135deg, rgba(244, 105, 42, 0.08), rgba(244, 105, 42, 0.03));
+  border-color: rgba(244, 105, 42, 0.3);
+  grid-column: 1 / -1;
+}
+
+.all-rooms-card .room-name {
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.all-rooms-card .master-controls {
+  padding: var(--sp-3);
+}
+
+.all-rooms-card .btn-start-all,
+.all-rooms-card .btn-stop-all {
+  padding: var(--sp-4);
+  font-size: var(--fs-md);
+}
+
 /* Rooms Grid */
 .rooms-grid {
   display: grid;
