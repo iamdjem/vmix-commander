@@ -105,6 +105,10 @@ type Controller = {
   operator: {
     name: string;
     role: 'Director' | 'Operator' | 'Observer';
+    crewId?: string;          // matches events/<id>/config/crew[].id when user
+                              // signed in as a specific crew member
+    assignedRooms?: string[]; // Commander: room KEYS; Tracker mirrors room NAMES
+                              // (match cross-app by name — see Crew alignment note)
   };
   lastHeartbeat: number;  // epoch ms, refreshed every ~5s
   safetyLocked: boolean;
@@ -114,6 +118,18 @@ type Controller = {
 **Stale detection:** if `Date.now() - lastHeartbeat > 10_000`, treat the
 controller as gone. Tracker should display "Commander offline" and Commander
 should allow claiming control on startup.
+
+**Crew alignment:** Both apps' identity modals offer a "Sign in as crew member"
+dropdown populated from `events/<id>/config/crew` (Tracker-owned, written from
+the Tracker's Setup page). Picking a crew member sets `operator.crewId` and
+derives `operator.assignedRooms` by matching each crew room's `name` against
+the app's own room list:
+- Commander stores room **keys** in `assignedRooms` (its internal identifier).
+- Tracker stores room **names** in `assignedRooms` (its rooms are addressed by
+  name).
+- Cross-app matching is by `name` (case-sensitive exact match). Keep vMix room
+  names in Commander's profile aligned with crew room names on the Tracker
+  Setup page; a mismatch silently drops that room from the operator's scope.
 
 ### `events/<eventId>/audit/<pushId>`
 
@@ -300,6 +316,10 @@ The tombstone is permanent — do not recycle event IDs.
 
 - **2026-04-17** — Added `controller`, `audit`, `errors`, `runOfShow`,
   `roomLocks`, and per-event `config.vmixProxyUrl`.
+- **2026-04-17 (phase 2)** — Added optional `crewId` + `assignedRooms` to the
+  `operator` payload in both `controller` and `vmixStatus`. Populated when a
+  user signs in as a specific crew member from `config.crew`. Tracker's
+  Recording page gains Director-only filter tabs per crew member.
 
 ## Known gaps
 
