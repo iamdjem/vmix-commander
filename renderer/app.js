@@ -447,11 +447,22 @@ function setupNavigation() {
 }
 
 function switchPage(page) {
+  // Events + Tunnel tabs were folded into Settings. Any residual call to
+  // switchPage('events') or switchPage('tunnel') — old localStorage, a
+  // stale data-page, a bookmark — must redirect BEFORE we try to find the
+  // (no-longer-existing) page element, or we throw and take down the whole
+  // shell including the sign-in gate wiring.
+  if (page === 'events' || page === 'tunnel') { page = 'settings'; }
+
   appState.currentPage = page;
 
   // Update page visibility
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const pageEl = document.getElementById(`page-${page}`);
+  if (!pageEl) {
+    console.warn('switchPage: unknown page', page);
+    return;
+  }
   pageEl.classList.add('active');
 
   // Update header title from page data attribute
@@ -477,14 +488,6 @@ function switchPage(page) {
     startStatusRefresh();
   } else {
     stopStatusRefresh();
-  }
-
-  // events + tunnel folded into Settings; if something still tries to route
-  // to them, redirect to Settings so deep links / stale data-page attributes
-  // don't land on a missing page.
-  if (page === 'events' || page === 'tunnel') {
-    switchPage('settings');
-    return;
   }
 
   if (page === 'show') {
