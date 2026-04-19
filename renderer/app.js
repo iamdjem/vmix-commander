@@ -593,10 +593,14 @@ function setupEventListeners() {
     }
   });
 
-  // Change identity button
-  document.getElementById('btn-change-identity').addEventListener('click', () => {
-    showChangeIdentityModal();
-  });
+  // Change identity — reuse the sign-in gate's identity picker step, no
+  // password re-entry. Mirrors the header chip's menu item.
+  const btnChangeIdentity = document.getElementById('btn-settings-change-identity');
+  if (btnChangeIdentity) btnChangeIdentity.addEventListener('click', () => signInReopenForChangeIdentity());
+
+  // Sign out from the Settings row — same action as the chip menu.
+  const btnSettingsSignout = document.getElementById('btn-settings-signout');
+  if (btnSettingsSignout) btnSettingsSignout.addEventListener('click', () => fullSignOut());
 
   // Re-match rooms — re-resolves assignedRooms from the current tracker
   // crew roster and persists. Only relevant when bound to a crew member.
@@ -604,13 +608,6 @@ function setupEventListeners() {
   if (btnRematch) {
     btnRematch.addEventListener('click', () => { rematchAssignedRooms(); });
   }
-
-  // Account section — admin/crew role switch. Triggers a Firebase reauth
-  // when sync is enabled; otherwise just persists the choice for next connect.
-  const btnSwitchAdmin = document.getElementById('btn-switch-role-admin');
-  if (btnSwitchAdmin) btnSwitchAdmin.addEventListener('click', () => switchTrackerRole('admin'));
-  const btnSwitchUser  = document.getElementById('btn-switch-role-user');
-  if (btnSwitchUser)  btnSwitchUser.addEventListener('click', () => switchTrackerRole('user'));
 
   // Cloud sync checkbox
   document.getElementById('chk-sync-enabled').addEventListener('change', async (e) => {
@@ -1846,6 +1843,10 @@ async function loadIdentity() {
 async function saveIdentity(identity) {
   appState.identity = identity;
   await window.identity.save(identity);
+  // Keep the header chip + Settings account row in sync on every identity
+  // change (including sign-out where identity === null).
+  if (typeof updateHeaderIdentityChip === 'function') updateHeaderIdentityChip();
+  if (typeof updateAccountDisplay === 'function') updateAccountDisplay();
   if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
   // Refresh presence so the tracker sees the new operator name/role.
   if (appState.syncEnabled && !_readOnlyMode && typeof startPresenceHeartbeat === 'function') {
@@ -2085,31 +2086,33 @@ function showChangeIdentityModal() {
 }
 
 function updateAccountDisplay() {
-  const el = document.getElementById('account-display');
-  if (!el) return;
-  const stored = getStoredRole();
-  const live = currentRole;
-  if (live === 'admin') {
-    el.innerHTML = '<strong>Signed in as:</strong> <span style="color:var(--accent);">Admin</span>';
-  } else if (live === 'user') {
-    el.innerHTML = '<strong>Signed in as:</strong> <span style="color:var(--green);">Crew</span>';
-  } else if (stored === 'admin') {
-    el.innerHTML = '<strong>Will sign in as:</strong> Admin <span style="color:var(--t3);">(enable sync to apply)</span>';
-  } else if (stored === 'user') {
-    el.innerHTML = '<strong>Will sign in as:</strong> Crew <span style="color:var(--t3);">(enable sync to apply)</span>';
+  const row = document.querySelector('.auth-row');
+  const info = document.getElementById('settings-account-info');
+  const signoutBtn = document.getElementById('btn-settings-signout');
+  const changeBtn = document.getElementById('btn-settings-change-identity');
+  if (!info) return;
+  if (row) { row.classList.remove('role-admin', 'role-crew'); if (currentRole) row.classList.add(currentRole === 'admin' ? 'role-admin' : 'role-crew'); }
+  if (currentRole === 'admin' || currentRole === 'user') {
+    const roleLbl = currentRole === 'admin' ? 'ADMIN' : 'CREW';
+    const name = appState.identity && appState.identity.name ? ' · ' + escapeHtmlForSignin(appState.identity.name) : '';
+    info.innerHTML = 'Signed in as <span class="auth-row-role">' + roleLbl + '</span>' + name;
+    if (signoutBtn) signoutBtn.style.display = '';
+    if (changeBtn) changeBtn.style.display = '';
   } else {
-    el.innerHTML = '<span style="color:var(--t3);">Not signed in — pick a role and enable sync</span>';
+    info.innerHTML = '<span style="color:var(--t3);">Not signed in</span>';
+    if (signoutBtn) signoutBtn.style.display = 'none';
+    if (changeBtn) changeBtn.style.display = 'none';
   }
-  // Disable the matching button so it's clear which one is active.
-  const btnA = document.getElementById('btn-switch-role-admin');
-  const btnU = document.getElementById('btn-switch-role-user');
-  if (btnA) btnA.disabled = (live === 'admin');
-  if (btnU) btnU.disabled = (live === 'user');
 }
 
 function updateIdentityDisplay() {
+  // Legacy identity section was removed from Settings — the header chip
+  // + Account row now cover the display. Show the "Re-match rooms"
+  // button (only when bound to a crew member) and bail early.
+  const btnRematch = document.getElementById('btn-rematch-rooms');
+  if (btnRematch) btnRematch.style.display = appState.identity && appState.identity.crewId ? '' : 'none';
   const display = document.getElementById('identity-display');
-  if (!appState.identity) return;
+  if (!display || !appState.identity) return;
 
   let html = `<div style="margin-bottom: 8px;"><strong>Name:</strong> ${appState.identity.name}</div>`;
   html += `<div style="margin-bottom: 8px;"><strong>Role:</strong> ${appState.identity.role}</div>`;

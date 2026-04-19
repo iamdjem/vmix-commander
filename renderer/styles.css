@@ -829,6 +829,28 @@ body.readonly-mode { padding-top: 32px; }
   gap: var(--sp-2);
 }
 
+/* ─── Settings Account row (mirrors tracker's auth-row) ─────────────── */
+.auth-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+.auth-row-info { font-size: var(--fs-sm); color: var(--t2); }
+.auth-row-role {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.auth-row.role-crew .auth-row-role { color: var(--green); }
+.auth-signout:active { background: var(--red); border-color: var(--red); color: #fff; }
+
 /* ─── Sign-in gate ─────────────────────────────────────────────────────── */
 .signin-gate {
   position: fixed;

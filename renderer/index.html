@@ -218,22 +218,13 @@
       <div class="settings-container">
         <div class="settings-section">
           <div class="settings-label">Account</div>
-          <div id="account-display" class="identity-display">Not signed in</div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button id="btn-switch-role-admin" class="btn btn-ghost">Sign in as Admin</button>
-            <button id="btn-switch-role-user" class="btn btn-ghost">Sign in as Crew</button>
+          <div class="auth-row">
+            <div class="auth-row-info" id="settings-account-info">Not signed in</div>
+            <button id="btn-settings-signout" class="btn btn-ghost btn-sm auth-signout">Sign out</button>
           </div>
-          <div style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5;">
-            Admin can archive events, edit conference config, and manage profiles. Crew has read + write access to live data.
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-label">My Identity</div>
-          <div id="identity-display" class="identity-display"></div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button id="btn-change-identity" class="btn btn-ghost">Change Identity</button>
-            <button id="btn-rematch-rooms" class="btn btn-ghost" style="display:none;">Re-match rooms from crew list</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button id="btn-settings-change-identity" class="btn btn-ghost btn-sm">Change identity</button>
+            <button id="btn-rematch-rooms" class="btn btn-ghost btn-sm" style="display:none;">Re-match rooms from crew list</button>
           </div>
         </div>
 
