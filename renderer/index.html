@@ -24,6 +24,63 @@
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
   </template>
 
+  <!-- Sign-in gate. Full-screen, shown before the app when no Firebase auth
+       role is stored. Closes itself on successful sign-in + identity pick. -->
+  <div id="signin-gate" class="signin-gate" style="display:none;" aria-hidden="true">
+    <div class="signin-gate-inner">
+      <div class="signin-brand">
+        <div class="signin-title">vMix Commander</div>
+        <div class="signin-version"><span id="signin-version-label">v0.6.13</span></div>
+      </div>
+      <div class="signin-subtitle">Sign in to continue</div>
+
+      <!-- Step 1: pick a role -->
+      <div id="signin-step-role" class="signin-step">
+        <button class="signin-role-card" data-role="admin" type="button">
+          <div class="signin-role-name">ADMIN</div>
+          <div class="signin-role-desc">Full access. Archive events, manage rooms + crew, delete profiles.</div>
+        </button>
+        <button class="signin-role-card" data-role="user" type="button">
+          <div class="signin-role-name">CREW</div>
+          <div class="signin-role-desc">Operate your assigned rooms. Pick yourself from the event roster.</div>
+        </button>
+      </div>
+
+      <!-- Step 2: password prompt (for admin or crew) -->
+      <div id="signin-step-password" class="signin-step" style="display:none;">
+        <div class="signin-step-title" id="signin-pw-title">Password</div>
+        <input type="password" id="signin-pw-input" class="signin-input" placeholder="Password" autocomplete="current-password">
+        <div id="signin-pw-error" class="signin-error" style="display:none;"></div>
+        <div class="signin-actions">
+          <button id="signin-pw-back" class="btn btn-ghost" type="button">Back</button>
+          <button id="signin-pw-next" class="btn btn-primary" type="button">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 3a: admin identity (name only) -->
+      <div id="signin-step-admin-identity" class="signin-step" style="display:none;">
+        <div class="signin-step-title">Your name</div>
+        <div class="signin-step-hint">Attributed on every action in the audit log.</div>
+        <input type="text" id="signin-admin-name" class="signin-input" placeholder="e.g. Alex" autocomplete="off">
+        <div class="signin-actions">
+          <button id="signin-admin-back" class="btn btn-ghost" type="button">Back</button>
+          <button id="signin-admin-done" class="btn btn-primary" type="button">Sign in</button>
+        </div>
+      </div>
+
+      <!-- Step 3b: crew identity (pick from roster) -->
+      <div id="signin-step-crew-identity" class="signin-step" style="display:none;">
+        <div class="signin-step-title">Who are you?</div>
+        <div class="signin-step-hint" id="signin-crew-hint">Pick yourself from this event's crew list. Your rooms will be scoped automatically.</div>
+        <div id="signin-crew-list" class="signin-crew-list"></div>
+        <div class="signin-actions">
+          <button id="signin-crew-back" class="btn btn-ghost" type="button">Back</button>
+          <button id="signin-crew-done" class="btn btn-primary" type="button" disabled>Sign in</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Unified Header Bar -->
   <div id="top-header" class="top-header">
     <div class="header-left">
@@ -34,6 +91,17 @@
       <div id="proxy-status-inline" class="proxy-status-inline">
         <span id="proxy-indicator" class="proxy-dot">●</span>
         <span id="proxy-label">Proxy starting…</span>
+      </div>
+      <!-- Identity chip + dropdown menu (Change identity / Sign out). -->
+      <div id="header-identity" class="header-identity" style="display:none;">
+        <button type="button" id="header-identity-btn" class="header-identity-btn" aria-haspopup="menu" aria-expanded="false">
+          <span id="header-identity-role" class="header-identity-role">—</span>
+          <span id="header-identity-sub" class="header-identity-sub"></span>
+        </button>
+        <div id="header-identity-menu" class="header-identity-menu" role="menu" style="display:none;">
+          <button type="button" class="header-identity-menu-item" data-action="change-identity" role="menuitem">Change identity</button>
+          <button type="button" class="header-identity-menu-item" data-action="sign-out" role="menuitem">Sign out</button>
+        </div>
       </div>
     </div>
   </div>

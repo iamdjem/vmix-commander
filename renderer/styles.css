@@ -829,6 +829,195 @@ body.readonly-mode { padding-top: 32px; }
   gap: var(--sp-2);
 }
 
+/* ─── Sign-in gate ─────────────────────────────────────────────────────── */
+.signin-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: var(--s1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+.signin-gate-inner {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.signin-brand { text-align: center; margin-bottom: var(--sp-2); }
+.signin-title {
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  color: var(--t1);
+  letter-spacing: -0.3px;
+}
+.signin-version { font-size: var(--fs-xs); color: var(--t3); margin-top: 2px; }
+.signin-subtitle {
+  text-align: center;
+  color: var(--t2);
+  font-size: var(--fs-md);
+  margin-bottom: var(--sp-3);
+}
+.signin-step { display: flex; flex-direction: column; gap: var(--sp-3); }
+.signin-step-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--t1);
+}
+.signin-step-hint {
+  font-size: var(--fs-sm);
+  color: var(--t3);
+  line-height: 1.5;
+}
+.signin-role-card {
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--ease);
+  font-family: inherit;
+  color: var(--t1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.signin-role-card:hover { border-color: var(--accent); background: rgba(244, 105, 42, 0.05); }
+.signin-role-card:active { transform: scale(0.98); }
+.signin-role-name {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+}
+.signin-role-desc {
+  font-size: var(--fs-sm);
+  color: var(--t2);
+  line-height: 1.5;
+}
+.signin-input {
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  color: var(--t1);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-md);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.signin-input:focus { outline: none; border-color: var(--accent); }
+.signin-error {
+  color: var(--red);
+  font-size: var(--fs-sm);
+}
+.signin-actions {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  margin-top: var(--sp-2);
+}
+.signin-crew-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.signin-crew-option {
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--ease);
+  font-family: inherit;
+  color: var(--t1);
+  font-size: var(--fs-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.signin-crew-option:hover { border-color: var(--accent); }
+.signin-crew-option.selected {
+  border-color: var(--accent);
+  background: rgba(244, 105, 42, 0.08);
+}
+.signin-crew-option-name { font-weight: 600; color: var(--t1); }
+.signin-crew-option-rooms { font-size: var(--fs-xs); color: var(--t3); }
+.signin-crew-option-observer {
+  border-style: dashed;
+  border-color: rgba(255,255,255,0.15);
+}
+.signin-crew-option-observer .signin-crew-option-name { color: var(--t2); font-weight: 500; }
+
+/* ─── Identity chip in header + dropdown ──────────────────────────────── */
+.header-identity { position: relative; }
+.header-identity-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  color: var(--t1);
+  cursor: pointer;
+  padding: var(--sp-1) var(--sp-2);
+  font-family: inherit;
+  line-height: 1.15;
+}
+.header-identity-btn:hover { border-color: var(--accent); }
+.header-identity-role {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  color: var(--accent);
+}
+.header-identity.role-crew .header-identity-role { color: var(--green); }
+.header-identity.role-offline .header-identity-role { color: var(--t3); }
+.header-identity-sub {
+  font-size: var(--fs-xs);
+  color: var(--t3);
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-identity-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  min-width: 180px;
+  z-index: 500;
+  overflow: hidden;
+}
+.header-identity-menu-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--t1);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+}
+.header-identity-menu-item:hover { background: rgba(255,255,255,0.04); color: var(--accent); }
+
 /* Admin-only elements. Mirrors the tracker's role-admin / role-user
  * body-class gating so admin-only buttons stay hidden for crew users
  * without per-element JS checks scattered throughout the codebase. */

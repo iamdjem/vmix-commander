@@ -275,35 +275,102 @@ async function init() {
   // Load identity first - required before anything else
   await loadIdentity();
 
-  // Show onboarding if no identity
-  if (!appState.identity) {
-    showIdentityOnboarding();
-    return; // Don't proceed until identity is set
-  }
-
-  // Continue normal initialization
+  // Always set up the app shell first so the sign-in gate has functioning
+  // buttons + subscriptions once the user signs in.
   await loadProfiles();
   await loadAuditLog();
   updateIdentityBadge();
   setupNavigation();
   setupEventListeners();
+  setupSignInGateListeners();
   applyRoleRestrictions();
-  switchPage('rooms');
 
   // Load always-on-top preference
   const alwaysOnTop = await window.windowControls.isAlwaysOnTop();
   document.getElementById('chk-always-on-top').checked = alwaysOnTop;
 
-  // Load sync settings from profile
-  const profile = getCurrentProfile();
-  if (profile.syncEnabled) {
-    appState.syncEnabled = profile.syncEnabled;
-    document.getElementById('chk-sync-enabled').checked = true;
-    connectToFirebase();
+  // Gate the app behind sign-in. If we have a previously-stored role + an
+  // identity, resume silently. Otherwise show the sign-in screen.
+  const storedRole = getStoredRole();
+  if (storedRole && appState.identity) {
+    // Resume previous session — the existing sync-enabled flow will
+    // reauthenticate via initTrackerFirebase on connect.
+    applyRoleToBody(storedRole);
+    currentRole = storedRole;
+    switchPage('rooms');
+    const profile = getCurrentProfile();
+    if (profile.syncEnabled) {
+      appState.syncEnabled = true;
+      document.getElementById('chk-sync-enabled').checked = true;
+      connectToFirebase();
+    }
+  } else {
+    // First-time or signed-out — force the sign-in gate. We still call
+    // switchPage to keep page elements initialized in the background.
+    switchPage('rooms');
+    showSignInGate();
   }
+
+  updateHeaderIdentityChip();
 
   // Start auto-trigger checker for run-of-show
   startShowAutoTrigger();
+}
+
+// Wire up the sign-in gate buttons once at init. All handlers are on a
+// single gate, so this runs before any sign-in attempt.
+function setupSignInGateListeners() {
+  // Role cards (step 1)
+  document.querySelectorAll('.signin-role-card').forEach(btn => {
+    btn.addEventListener('click', () => signInSelectRole(btn.dataset.role));
+  });
+  // Password step
+  const pwNext = document.getElementById('signin-pw-next');
+  const pwBack = document.getElementById('signin-pw-back');
+  const pwInput = document.getElementById('signin-pw-input');
+  if (pwNext) pwNext.addEventListener('click', () => signInVerifyPassword());
+  if (pwBack) pwBack.addEventListener('click', () => signInShowStep('role'));
+  if (pwInput) pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') signInVerifyPassword(); });
+  // Admin identity step
+  const admDone = document.getElementById('signin-admin-done');
+  const admBack = document.getElementById('signin-admin-back');
+  const admInput = document.getElementById('signin-admin-name');
+  if (admDone) admDone.addEventListener('click', () => signInFinishAdmin());
+  if (admBack) admBack.addEventListener('click', () => signInShowStep('password'));
+  if (admInput) admInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') signInFinishAdmin(); });
+  // Crew identity step
+  const crewDone = document.getElementById('signin-crew-done');
+  const crewBack = document.getElementById('signin-crew-back');
+  if (crewDone) crewDone.addEventListener('click', () => signInFinishCrew());
+  if (crewBack) crewBack.addEventListener('click', () => signInShowStep('password'));
+
+  // Header identity chip — click toggles menu
+  const chipBtn = document.getElementById('header-identity-btn');
+  const chipMenu = document.getElementById('header-identity-menu');
+  if (chipBtn && chipMenu) {
+    chipBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = chipMenu.style.display === 'block';
+      chipMenu.style.display = open ? 'none' : 'block';
+      chipBtn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    // Click outside closes the menu
+    document.addEventListener('click', (e) => {
+      if (!chipBtn.contains(e.target) && !chipMenu.contains(e.target)) {
+        chipMenu.style.display = 'none';
+        chipBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+    chipMenu.querySelectorAll('.header-identity-menu-item').forEach(item => {
+      item.addEventListener('click', () => {
+        chipMenu.style.display = 'none';
+        chipBtn.setAttribute('aria-expanded', 'false');
+        const action = item.dataset.action;
+        if (action === 'change-identity') signInReopenForChangeIdentity();
+        else if (action === 'sign-out') fullSignOut();
+      });
+    });
+  }
 }
 
 // Load profiles from main process
@@ -2377,6 +2444,262 @@ async function signInTrackerAs(role) {
   currentRole = desired;
   setStoredRole(desired);
   applyRoleToBody(desired);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Sign-in gate — unified sign-in + identity flow. Replaces the separate
+// "sign in as admin/crew" buttons + "change identity" modal with a single
+// launch-time prompt that maps the auth role (ADMIN/CREW) to the right
+// identity shape (Director name vs. crew roster pick) in one interaction.
+// ────────────────────────────────────────────────────────────────────────
+let _signinChosenRole = null;   // 'admin' | 'user'
+let _signinChosenCrew = null;   // crew.id (or null for Observer/Director)
+
+function showSignInGate() {
+  const gate = document.getElementById('signin-gate');
+  if (!gate) return;
+  gate.style.display = 'flex';
+  gate.setAttribute('aria-hidden', 'false');
+  signInShowStep('role');
+  // Clear inputs
+  const pw = document.getElementById('signin-pw-input'); if (pw) pw.value = '';
+  const err = document.getElementById('signin-pw-error'); if (err) err.style.display = 'none';
+  const nm = document.getElementById('signin-admin-name'); if (nm) nm.value = appState.identity?.name || '';
+  _signinChosenRole = null;
+  _signinChosenCrew = null;
+}
+
+function hideSignInGate() {
+  const gate = document.getElementById('signin-gate');
+  if (!gate) return;
+  gate.style.display = 'none';
+  gate.setAttribute('aria-hidden', 'true');
+}
+
+function signInShowStep(stepName) {
+  const steps = {
+    role:          document.getElementById('signin-step-role'),
+    password:      document.getElementById('signin-step-password'),
+    adminIdentity: document.getElementById('signin-step-admin-identity'),
+    crewIdentity:  document.getElementById('signin-step-crew-identity')
+  };
+  Object.entries(steps).forEach(([name, el]) => { if (el) el.style.display = name === stepName ? '' : 'none'; });
+  // Focus the relevant input for the step
+  setTimeout(() => {
+    if (stepName === 'password') document.getElementById('signin-pw-input')?.focus();
+    else if (stepName === 'adminIdentity') document.getElementById('signin-admin-name')?.focus();
+  }, 30);
+}
+
+function signInSelectRole(role) {
+  _signinChosenRole = role === 'admin' ? 'admin' : 'user';
+  const title = document.getElementById('signin-pw-title');
+  if (title) title.textContent = _signinChosenRole === 'admin' ? 'Admin password' : 'Crew password';
+  signInShowStep('password');
+}
+
+async function signInVerifyPassword() {
+  const input = document.getElementById('signin-pw-input');
+  const err = document.getElementById('signin-pw-error');
+  if (!input || !err) return;
+  const pass = input.value;
+  const expected = _signinChosenRole === 'admin' ? TRACKER_AUTH_ADMIN_PASSWORD : TRACKER_AUTH_USER_PASSWORD;
+  if (pass !== expected) {
+    err.textContent = 'Incorrect password.';
+    err.style.display = '';
+    return;
+  }
+  err.style.display = 'none';
+  // Authenticate to Firebase so subsequent subscriptions work. We defer the
+  // actual sign-in call until we have the full identity (name or crew pick)
+  // — but we pre-flight by requiring sync to be enabled for this to matter.
+  if (_signinChosenRole === 'admin') {
+    signInShowStep('adminIdentity');
+  } else {
+    renderSignInCrewList();
+    signInShowStep('crewIdentity');
+  }
+}
+
+function renderSignInCrewList() {
+  const list = document.getElementById('signin-crew-list');
+  const doneBtn = document.getElementById('signin-crew-done');
+  const hint = document.getElementById('signin-crew-hint');
+  if (!list) return;
+  list.innerHTML = '';
+  const crew = Array.isArray(trackerCrewList) ? trackerCrewList.filter(c => c && c.name) : [];
+  if (!crew.length) {
+    if (hint) hint.textContent = 'No crew list available yet (no event linked, or admin has not added crew members). You can continue as an Observer and pick a crew member later from the identity menu.';
+  } else {
+    if (hint) hint.textContent = 'Pick yourself from this event\u2019s crew list. Your rooms will be scoped automatically.';
+  }
+  crew.forEach(c => {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = 'signin-crew-option';
+    opt.dataset.crewId = c.id;
+    const roomsLabel = (c.rooms && c.rooms.length) ? c.rooms.map(r => r && r.name).filter(Boolean).join(', ') : '(no rooms assigned)';
+    opt.innerHTML = '<span class="signin-crew-option-name">' + escapeHtmlForSignin(c.name) + '</span>' +
+                    '<span class="signin-crew-option-rooms">' + escapeHtmlForSignin(roomsLabel) + '</span>';
+    opt.onclick = () => signInPickCrew(c.id, opt);
+    list.appendChild(opt);
+  });
+  // Observer fallback, always last
+  const obs = document.createElement('button');
+  obs.type = 'button';
+  obs.className = 'signin-crew-option signin-crew-option-observer';
+  obs.dataset.crewId = '__observer__';
+  obs.innerHTML = '<span class="signin-crew-option-name">I\u2019m not listed \u2014 observer only</span>' +
+                  '<span class="signin-crew-option-rooms">Read-only access. No start/stop controls.</span>';
+  obs.onclick = () => signInPickCrew('__observer__', obs);
+  list.appendChild(obs);
+  if (doneBtn) doneBtn.disabled = true;
+  _signinChosenCrew = null;
+}
+
+function signInPickCrew(crewId, el) {
+  _signinChosenCrew = crewId;
+  const list = document.getElementById('signin-crew-list');
+  if (list) list.querySelectorAll('.signin-crew-option.selected').forEach(n => n.classList.remove('selected'));
+  if (el) el.classList.add('selected');
+  const doneBtn = document.getElementById('signin-crew-done');
+  if (doneBtn) doneBtn.disabled = false;
+}
+
+async function signInFinishAdmin() {
+  const nameInput = document.getElementById('signin-admin-name');
+  const name = (nameInput?.value || '').trim();
+  if (!name) { nameInput?.focus(); return; }
+  try {
+    await signInTrackerAs('admin');
+  } catch (error) {
+    console.error('Firebase sign-in failed:', error);
+    const err = document.getElementById('signin-pw-error');
+    if (err) { err.textContent = 'Sign-in failed: ' + (error.message || error); err.style.display = ''; }
+    signInShowStep('password');
+    return;
+  }
+  await saveIdentity({ name, role: 'Director' });
+  hideSignInGate();
+  // Keep the existing app init flow humming. Trigger any UI refreshes.
+  updateHeaderIdentityChip();
+  if (appState.currentPage === 'rooms') renderRooms();
+  if (appState.currentPage === 'settings') { renderSettings(); updateIdentityDisplay(); updateAccountDisplay(); }
+  // Enable sync automatically — the sign-in flow IS the sync onboarding now.
+  if (!appState.syncEnabled) {
+    appState.syncEnabled = true;
+    const profile = getCurrentProfile();
+    profile.syncEnabled = true;
+    const chk = document.getElementById('chk-sync-enabled');
+    if (chk) chk.checked = true;
+    await saveProfiles();
+    await connectToFirebase();
+  }
+}
+
+async function signInFinishCrew() {
+  if (!_signinChosenCrew) return;
+  try {
+    await signInTrackerAs('user');
+  } catch (error) {
+    console.error('Firebase sign-in failed:', error);
+    const err = document.getElementById('signin-pw-error');
+    if (err) { err.textContent = 'Sign-in failed: ' + (error.message || error); err.style.display = ''; }
+    signInShowStep('password');
+    return;
+  }
+  // Build identity based on selection
+  let identity;
+  if (_signinChosenCrew === '__observer__') {
+    identity = { name: 'Observer', role: 'Observer' };
+  } else {
+    const crew = (trackerCrewList || []).find(c => c && c.id === _signinChosenCrew);
+    if (crew) {
+      const roomNames = (crew.rooms || []).map(r => r && r.name).filter(Boolean);
+      const keys = roomNames.map(findRoomKeyByName).filter(Boolean);
+      identity = { name: crew.name, role: 'Operator', crewId: crew.id, assignedRooms: keys };
+    } else {
+      identity = { name: 'Observer', role: 'Observer' };
+    }
+  }
+  await saveIdentity(identity);
+  hideSignInGate();
+  updateHeaderIdentityChip();
+  if (appState.currentPage === 'rooms') renderRooms();
+  if (appState.currentPage === 'settings') { renderSettings(); updateIdentityDisplay(); updateAccountDisplay(); }
+  if (!appState.syncEnabled) {
+    appState.syncEnabled = true;
+    const profile = getCurrentProfile();
+    profile.syncEnabled = true;
+    const chk = document.getElementById('chk-sync-enabled');
+    if (chk) chk.checked = true;
+    await saveProfiles();
+    await connectToFirebase();
+  }
+}
+
+function signInReopenForChangeIdentity() {
+  // Reopen the sign-in gate but skip straight to the identity picker step
+  // for the role we're already signed in as — no password re-entry.
+  if (!currentRole) { showSignInGate(); return; }
+  const gate = document.getElementById('signin-gate');
+  if (!gate) return;
+  _signinChosenRole = currentRole;
+  gate.style.display = 'flex';
+  gate.setAttribute('aria-hidden', 'false');
+  if (currentRole === 'admin') {
+    const nm = document.getElementById('signin-admin-name');
+    if (nm) nm.value = appState.identity?.name || '';
+    signInShowStep('adminIdentity');
+  } else {
+    renderSignInCrewList();
+    // If the current identity maps to a crew member, preselect it
+    if (appState.identity?.crewId) {
+      const match = document.querySelector('.signin-crew-option[data-crew-id="' + appState.identity.crewId + '"]');
+      if (match) signInPickCrew(appState.identity.crewId, match);
+    }
+    signInShowStep('crewIdentity');
+  }
+}
+
+async function fullSignOut() {
+  try {
+    if (trackerAuth && trackerAuth.currentUser) await trackerAuth.signOut();
+  } catch (_) { /* ignore */ }
+  currentRole = null;
+  setStoredRole(null);
+  applyRoleToBody(null);
+  await saveIdentity(null);
+  appState.identity = null;
+  if (appState.syncEnabled) {
+    appState.syncEnabled = false;
+    const profile = getCurrentProfile();
+    if (profile) profile.syncEnabled = false;
+    const chk = document.getElementById('chk-sync-enabled');
+    if (chk) chk.checked = false;
+    await saveProfiles();
+    disconnectFromFirebase();
+  }
+  updateHeaderIdentityChip();
+  showSignInGate();
+}
+
+function updateHeaderIdentityChip() {
+  const host = document.getElementById('header-identity');
+  const roleEl = document.getElementById('header-identity-role');
+  const subEl = document.getElementById('header-identity-sub');
+  if (!host || !roleEl || !subEl) return;
+  if (!currentRole) { host.style.display = 'none'; return; }
+  host.style.display = '';
+  host.classList.remove('role-admin', 'role-crew', 'role-offline');
+  if (currentRole === 'admin') { roleEl.textContent = 'ADMIN'; host.classList.add('role-admin'); }
+  else if (currentRole === 'user') { roleEl.textContent = 'CREW'; host.classList.add('role-crew'); }
+  else { roleEl.textContent = 'OFFLINE'; host.classList.add('role-offline'); }
+  subEl.textContent = appState.identity?.name || '';
+}
+
+function escapeHtmlForSignin(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
 }
 
 // Switch role mid-session. Tears down event subscriptions, signs out,
