@@ -1608,10 +1608,9 @@ function renderSettings() {
     deleteBtn.textContent = '✕';
     deleteBtn.title = 'Remove room';
     deleteBtn.onclick = () => {
-      if (profile.rooms.length === 1) {
-        showToast('Need at least one room');
-        return;
-      }
+      // No floor on room count — an empty profile is a valid state (Rooms
+      // page already shows a "No rooms configured" empty state). Lets
+      // operators bulk-clear rooms when recovering from a polluted event.
       showConfirm({
         message: `Remove room "${room.name}"?`,
         onConfirm: () => {
