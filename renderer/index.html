@@ -55,7 +55,7 @@
     <div id="page-events" class="page" data-title="Event Profiles">
       <div class="profiles-container">
         <div id="profiles-list"></div>
-        <div class="profiles-actions">
+        <div class="profiles-actions admin-only admin-only-block">
           <button id="btn-new-profile" class="btn btn-ghost btn-new">+ New Profile</button>
           <button id="btn-export-profiles" class="btn btn-ghost">Export Profiles</button>
           <button id="btn-import-profiles" class="btn btn-ghost">Import Profiles</button>
@@ -148,6 +148,18 @@
     <!-- Settings Page -->
     <div id="page-settings" class="page" data-title="Settings">
       <div class="settings-container">
+        <div class="settings-section">
+          <div class="settings-label">Account</div>
+          <div id="account-display" class="identity-display">Not signed in</div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="btn-switch-role-admin" class="btn btn-ghost">Sign in as Admin</button>
+            <button id="btn-switch-role-user" class="btn btn-ghost">Sign in as Crew</button>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5;">
+            Admin can archive events, edit conference config, and manage profiles. Crew has read + write access to live data.
+          </div>
+        </div>
+
         <div class="settings-section">
           <div class="settings-label">My Identity</div>
           <div id="identity-display" class="identity-display"></div>

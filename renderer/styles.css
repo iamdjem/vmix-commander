@@ -829,6 +829,16 @@ body.readonly-mode { padding-top: 32px; }
   gap: var(--sp-2);
 }
 
+/* Admin-only elements. Mirrors the tracker's role-admin / role-user
+ * body-class gating so admin-only buttons stay hidden for crew users
+ * without per-element JS checks scattered throughout the codebase. */
+.admin-only { display: none !important; }
+body.role-admin .admin-only { display: initial !important; }
+body.role-admin .admin-only.admin-only-flex { display: flex !important; }
+body.role-admin .admin-only.admin-only-block { display: block !important; }
+body.role-admin .admin-only.admin-only-inline-flex { display: inline-flex !important; }
+body.role-user .admin-only-input { pointer-events: none; opacity: 0.55; }
+
 /* Archived state — dimmed so live profiles get visual priority */
 .profile-item.archived {
   opacity: 0.55;

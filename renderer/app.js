@@ -422,6 +422,7 @@ function switchPage(page) {
   if (page === 'settings') {
     renderSettings();
     updateIdentityDisplay();
+    updateAccountDisplay();
   }
 }
 
@@ -536,6 +537,13 @@ function setupEventListeners() {
   if (btnRematch) {
     btnRematch.addEventListener('click', () => { rematchAssignedRooms(); });
   }
+
+  // Account section — admin/crew role switch. Triggers a Firebase reauth
+  // when sync is enabled; otherwise just persists the choice for next connect.
+  const btnSwitchAdmin = document.getElementById('btn-switch-role-admin');
+  if (btnSwitchAdmin) btnSwitchAdmin.addEventListener('click', () => switchTrackerRole('admin'));
+  const btnSwitchUser  = document.getElementById('btn-switch-role-user');
+  if (btnSwitchUser)  btnSwitchUser.addEventListener('click', () => switchTrackerRole('user'));
 
   // Cloud sync checkbox
   document.getElementById('chk-sync-enabled').addEventListener('change', async (e) => {
@@ -1442,7 +1450,7 @@ function renderProfiles() {
     }
 
     const archiveBtn = document.createElement('button');
-    archiveBtn.className = 'btn btn-ghost';
+    archiveBtn.className = 'btn btn-ghost admin-only admin-only-inline-flex';
     archiveBtn.textContent = profile.archived ? 'Restore' : 'Archive';
     archiveBtn.title = profile.archived
       ? 'Restore — also unarchives the linked tracker event'
@@ -1451,7 +1459,7 @@ function renderProfiles() {
     actions.appendChild(archiveBtn);
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-danger';
+    deleteBtn.className = 'btn btn-danger admin-only admin-only-inline-flex';
     deleteBtn.textContent = '✕';
     deleteBtn.title = 'Delete profile';
     deleteBtn.onclick = () => deleteProfile(key);
@@ -2008,6 +2016,29 @@ function showChangeIdentityModal() {
   }
 }
 
+function updateAccountDisplay() {
+  const el = document.getElementById('account-display');
+  if (!el) return;
+  const stored = getStoredRole();
+  const live = currentRole;
+  if (live === 'admin') {
+    el.innerHTML = '<strong>Signed in as:</strong> <span style="color:var(--accent);">Admin</span>';
+  } else if (live === 'user') {
+    el.innerHTML = '<strong>Signed in as:</strong> <span style="color:var(--green);">Crew</span>';
+  } else if (stored === 'admin') {
+    el.innerHTML = '<strong>Will sign in as:</strong> Admin <span style="color:var(--t3);">(enable sync to apply)</span>';
+  } else if (stored === 'user') {
+    el.innerHTML = '<strong>Will sign in as:</strong> Crew <span style="color:var(--t3);">(enable sync to apply)</span>';
+  } else {
+    el.innerHTML = '<span style="color:var(--t3);">Not signed in — pick a role and enable sync</span>';
+  }
+  // Disable the matching button so it's clear which one is active.
+  const btnA = document.getElementById('btn-switch-role-admin');
+  const btnU = document.getElementById('btn-switch-role-user');
+  if (btnA) btnA.disabled = (live === 'admin');
+  if (btnU) btnU.disabled = (live === 'user');
+}
+
 function updateIdentityDisplay() {
   const display = document.getElementById('identity-display');
   if (!appState.identity) return;
@@ -2242,12 +2273,38 @@ const TRACKER_FB_CONFIG = {
   projectId: 'kubecon-tracker'
 };
 const TRACKER_FB_ROOT = 'e3-kc26-x7k9m';
-const TRACKER_USER_EMAIL = 'user@e3tracker.local';
-const TRACKER_USER_PASSWORD = 'e3crew';
+// Auth credentials shared with the Crew Tracker. Two accounts:
+//   admin@ → can do everything (archive events, edit config)
+//   user@  → standard crew, no admin-gated UI
+// Mirrors the tracker's AUTH_* constants — keep these in sync.
+const TRACKER_AUTH_ADMIN_EMAIL = 'admin@e3tracker.local';
+const TRACKER_AUTH_USER_EMAIL  = 'user@e3tracker.local';
+const TRACKER_AUTH_ADMIN_PASSWORD = 'e3admin';
+const TRACKER_AUTH_USER_PASSWORD  = 'e3crew';
+// Persisted role choice — restored on next launch so reconnect picks up
+// where the operator left off without prompting again.
+const TRACKER_ROLE_KEY = 'vmc:trackerRole';
 
 let trackerAuth = null;
 let trackerEvents = {};  // { eventId: eventObject } cached from tracker
 let trackerEventsRef = null;
+// 'admin' | 'user' | null. Mirrors the tracker's currentRole concept so
+// admin-only UI gating works the same way across both apps.
+let currentRole = null;
+function isAdmin() { return currentRole === 'admin'; }
+function getStoredRole() {
+  try { return localStorage.getItem(TRACKER_ROLE_KEY); } catch (_) { return null; }
+}
+function setStoredRole(role) {
+  try {
+    if (role) localStorage.setItem(TRACKER_ROLE_KEY, role);
+    else localStorage.removeItem(TRACKER_ROLE_KEY);
+  } catch (_) { /* ignore */ }
+}
+function applyRoleToBody(role) {
+  document.body.classList.toggle('role-admin', role === 'admin');
+  document.body.classList.toggle('role-user',  role === 'user');
+}
 
 function loadFirebaseScripts() {
   return new Promise((resolve, reject) => {
@@ -2284,9 +2341,63 @@ async function initTrackerFirebase() {
   firebaseDb = firebase.database();
   trackerAuth = firebase.auth();
 
-  // Sign in as user role (crew, not admin — we only read events and write rooms)
+  // Sign in with the persisted role choice (defaults to 'user' for crew).
+  // Admin gives access to destructive operations (archive, delete profile,
+  // edit conference config) — gated client-side via .admin-only CSS class.
   if (!trackerAuth.currentUser) {
-    await trackerAuth.signInWithEmailAndPassword(TRACKER_USER_EMAIL, TRACKER_USER_PASSWORD);
+    const desired = getStoredRole() === 'admin' ? 'admin' : 'user';
+    await signInTrackerAs(desired);
+  } else {
+    // Already signed in (re-init after page refresh): figure out role from
+    // the auth user's email and propagate to body class.
+    const email = trackerAuth.currentUser.email || '';
+    currentRole = email === TRACKER_AUTH_ADMIN_EMAIL ? 'admin' : 'user';
+    applyRoleToBody(currentRole);
+  }
+}
+
+// Sign in to Firebase using the chosen role's credentials. Updates
+// currentRole + persists the choice + propagates the body class for
+// CSS-driven admin-only gating. Caller decides whether to also kick off
+// subscriptions; this function just handles auth state.
+async function signInTrackerAs(role) {
+  if (!trackerAuth) return;
+  const desired = role === 'admin' ? 'admin' : 'user';
+  const email = desired === 'admin' ? TRACKER_AUTH_ADMIN_EMAIL : TRACKER_AUTH_USER_EMAIL;
+  const pass  = desired === 'admin' ? TRACKER_AUTH_ADMIN_PASSWORD : TRACKER_AUTH_USER_PASSWORD;
+  // If already signed in as someone else, sign out first so the next call
+  // picks up the new credentials cleanly.
+  if (trackerAuth.currentUser && trackerAuth.currentUser.email !== email) {
+    try { await trackerAuth.signOut(); } catch (_) { /* ignore */ }
+  }
+  if (!trackerAuth.currentUser) {
+    await trackerAuth.signInWithEmailAndPassword(email, pass);
+  }
+  currentRole = desired;
+  setStoredRole(desired);
+  applyRoleToBody(desired);
+}
+
+// Switch role mid-session. Tears down event subscriptions, signs out,
+// signs back in with the chosen role, then re-establishes everything.
+async function switchTrackerRole(role) {
+  const desired = role === 'admin' ? 'admin' : 'user';
+  if (currentRole === desired) return;
+  if (!appState.syncEnabled) {
+    // Sync disabled — just persist the choice; it'll be applied on reconnect.
+    setStoredRole(desired);
+    showToast(`Will sign in as ${desired === 'admin' ? 'Admin' : 'Crew'} on next connect`);
+    return;
+  }
+  try {
+    // Tear down subscriptions so they don't fire mid-reauth.
+    disconnectFromFirebase();
+    setStoredRole(desired);
+    await connectToFirebase();
+    showToast(desired === 'admin' ? 'Signed in as Admin' : 'Signed in as Crew');
+  } catch (error) {
+    console.error('Failed to switch role:', error);
+    showToast('Sign-in failed: ' + (error.message || error));
   }
 }
 
@@ -2333,6 +2444,7 @@ async function connectToFirebase() {
     pushSafetyLockToTracker();
 
     if (syncCheckbox) syncCheckbox.disabled = _readOnlyMode;
+    if (typeof updateAccountDisplay === 'function') updateAccountDisplay();
   } catch (error) {
     console.error('Firebase connection error:', error);
     updateSyncStatus('🔴 ' + (error.message || 'Connection failed'), false);
@@ -2355,6 +2467,14 @@ function disconnectFromFirebase() {
   unsubscribeFromTrackerSafetyLock();
   unsubscribeFromTrackerVmixRooms();
   setReadOnlyMode(false);
+  // Sign out so the next connect re-evaluates the persisted role choice
+  // cleanly. Keeps role-switch flows from getting stuck on stale auth.
+  if (trackerAuth && trackerAuth.currentUser) {
+    try { trackerAuth.signOut(); } catch (_) { /* ignore */ }
+  }
+  currentRole = null;
+  applyRoleToBody(null);
+  if (typeof updateAccountDisplay === 'function') updateAccountDisplay();
   trackerEvents = {};
   renderEventSelect();
   updateSyncStatus('🔴 Disconnected', false);
