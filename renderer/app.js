@@ -2511,6 +2511,7 @@ function signInSelectRole(role) {
 async function signInVerifyPassword() {
   const input = document.getElementById('signin-pw-input');
   const err = document.getElementById('signin-pw-error');
+  const btn = document.getElementById('signin-pw-next');
   if (!input || !err) return;
   const pass = input.value;
   const expected = _signinChosenRole === 'admin' ? TRACKER_AUTH_ADMIN_PASSWORD : TRACKER_AUTH_USER_PASSWORD;
@@ -2520,9 +2521,44 @@ async function signInVerifyPassword() {
     return;
   }
   err.style.display = 'none';
-  // Authenticate to Firebase so subsequent subscriptions work. We defer the
-  // actual sign-in call until we have the full identity (name or crew pick)
-  // — but we pre-flight by requiring sync to be enabled for this to matter.
+
+  // Authenticate to Firebase and pull the active event's crew + rooms BEFORE
+  // showing the picker. Previously the crew step ran with an empty crew
+  // list because connect happened inside signInFinishCrew — so users only
+  // ever saw the "observer" fallback. Enabling sync + connecting here also
+  // auto-links the current profile to the first live event (matches the
+  // tracker's default behavior).
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  try {
+    // Persist the role choice before connectToFirebase so initTrackerFirebase
+    // signs in with the right credentials.
+    setStoredRole(_signinChosenRole);
+    appState.syncEnabled = true;
+    const profile = getCurrentProfile();
+    profile.syncEnabled = true;
+    const chk = document.getElementById('chk-sync-enabled');
+    if (chk) chk.checked = true;
+    await saveProfiles();
+    await connectToFirebase();
+
+    // For crew sign-in, the roster subscription fires once the event link
+    // is in place. Wait up to 1.5s for the first snapshot so the picker
+    // isn't empty on slow networks.
+    if (_signinChosenRole === 'user') {
+      const waitStart = Date.now();
+      while (!trackerCrewList.length && Date.now() - waitStart < 1500) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+  } catch (error) {
+    console.error('Sign-in connect failed:', error);
+    err.textContent = 'Connection failed: ' + (error.message || String(error));
+    err.style.display = '';
+    if (btn) { btn.disabled = false; btn.textContent = 'Continue'; }
+    return;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Continue'; }
+
   if (_signinChosenRole === 'admin') {
     signInShowStep('adminIdentity');
   } else {
@@ -2580,45 +2616,16 @@ async function signInFinishAdmin() {
   const nameInput = document.getElementById('signin-admin-name');
   const name = (nameInput?.value || '').trim();
   if (!name) { nameInput?.focus(); return; }
-  try {
-    await signInTrackerAs('admin');
-  } catch (error) {
-    console.error('Firebase sign-in failed:', error);
-    const err = document.getElementById('signin-pw-error');
-    if (err) { err.textContent = 'Sign-in failed: ' + (error.message || error); err.style.display = ''; }
-    signInShowStep('password');
-    return;
-  }
   await saveIdentity({ name, role: 'Director' });
   hideSignInGate();
-  // Keep the existing app init flow humming. Trigger any UI refreshes.
   updateHeaderIdentityChip();
+  applyRoleRestrictions();
   if (appState.currentPage === 'rooms') renderRooms();
   if (appState.currentPage === 'settings') { renderSettings(); updateIdentityDisplay(); updateAccountDisplay(); }
-  // Enable sync automatically — the sign-in flow IS the sync onboarding now.
-  if (!appState.syncEnabled) {
-    appState.syncEnabled = true;
-    const profile = getCurrentProfile();
-    profile.syncEnabled = true;
-    const chk = document.getElementById('chk-sync-enabled');
-    if (chk) chk.checked = true;
-    await saveProfiles();
-    await connectToFirebase();
-  }
 }
 
 async function signInFinishCrew() {
   if (!_signinChosenCrew) return;
-  try {
-    await signInTrackerAs('user');
-  } catch (error) {
-    console.error('Firebase sign-in failed:', error);
-    const err = document.getElementById('signin-pw-error');
-    if (err) { err.textContent = 'Sign-in failed: ' + (error.message || error); err.style.display = ''; }
-    signInShowStep('password');
-    return;
-  }
-  // Build identity based on selection
   let identity;
   if (_signinChosenCrew === '__observer__') {
     identity = { name: 'Observer', role: 'Observer' };
@@ -2635,17 +2642,9 @@ async function signInFinishCrew() {
   await saveIdentity(identity);
   hideSignInGate();
   updateHeaderIdentityChip();
+  applyRoleRestrictions();
   if (appState.currentPage === 'rooms') renderRooms();
   if (appState.currentPage === 'settings') { renderSettings(); updateIdentityDisplay(); updateAccountDisplay(); }
-  if (!appState.syncEnabled) {
-    appState.syncEnabled = true;
-    const profile = getCurrentProfile();
-    profile.syncEnabled = true;
-    const chk = document.getElementById('chk-sync-enabled');
-    if (chk) chk.checked = true;
-    await saveProfiles();
-    await connectToFirebase();
-  }
 }
 
 function signInReopenForChangeIdentity() {
@@ -2744,18 +2743,34 @@ async function connectToFirebase() {
   try {
     await initTrackerFirebase();
 
-    // Listen to the tracker's events collection
+    // Listen to the tracker's events collection. Await the first snapshot so
+    // downstream auto-link + reconcile have real data, not the empty {} seed.
     if (!trackerEventsRef) {
       trackerEventsRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events`);
-      trackerEventsRef.on('value', (snap) => {
-        trackerEvents = snap.val() || {};
-        renderEventSelect();
-        // Mirror remote archive state into any locally-linked profiles so
-        // the Events page + tab strip reflect tracker changes immediately.
-        mirrorTrackerArchiveStateToProfiles();
-        updateSyncStatus('🟢 Connected', true);
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        trackerEventsRef.on('value', (snap) => {
+          trackerEvents = snap.val() || {};
+          renderEventSelect();
+          // Mirror remote archive state into any locally-linked profiles so
+          // the Events page + tab strip reflect tracker changes immediately.
+          mirrorTrackerArchiveStateToProfiles();
+          // On subsequent snapshots (event created/deleted elsewhere), keep
+          // the current profile pointed at a live event.
+          if (settled) autoLinkFirstLiveEventIfNeeded();
+          updateSyncStatus('🟢 Connected', true);
+          if (!settled) { settled = true; resolve(); }
+        }, (error) => {
+          if (!settled) { settled = true; reject(error); }
+        });
       });
     }
+
+    // Auto-link the current profile to the first live tracker event when
+    // it has no link yet (or the linked event was archived/deleted). Mirrors
+    // the tracker's "first live event" auto-pick so a fresh Commander
+    // install inherits rooms + crew from the event without manual linking.
+    await autoLinkFirstLiveEventIfNeeded();
 
     // Reconcile rooms on connect — adopt the event's rooms when present
     // (template duplicate etc.), only push up when the event has none yet.
@@ -2885,6 +2900,29 @@ async function pushRoomsToTrackerEvent() {
 async function pushToFirebase() {
   if (!appState.syncEnabled) return;
   await pushRoomsToTrackerEvent();
+}
+
+// Auto-link the current profile to the first live tracker event when it
+// has no link (fresh install) or the previously-linked event is gone
+// (archived/deleted). Matches the tracker's "first live event" auto-pick
+// so operators don't have to manually link via Settings → Events before
+// seeing crew + rooms.
+async function autoLinkFirstLiveEventIfNeeded() {
+  const profile = getCurrentProfile();
+  if (!profile) return;
+  // Keep an existing link if it still points at a live, non-template event.
+  if (profile.trackerEventId) {
+    const existing = trackerEvents[profile.trackerEventId];
+    if (existing && !existing.archived && !isTemplateTrackerEvent(existing)) return;
+  }
+  const liveEvent = Object.values(trackerEvents)
+    .filter(ev => ev && !ev.archived && !isTemplateTrackerEvent(ev))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+  const nextId = liveEvent && liveEvent.id ? liveEvent.id : null;
+  if (profile.trackerEventId === nextId) return;
+  profile.trackerEventId = nextId;
+  await saveProfiles();
+  renderEventSelect();
 }
 
 // Reconcile vmixRooms between this Commander and the linked tracker event
