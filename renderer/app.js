@@ -575,7 +575,9 @@ function setupEventListeners() {
       unsubscribeFromTrackerSafetyLock();
       unsubscribeFromTrackerVmixRooms();
       if (eventId) {
-        await pushRoomsToTrackerEvent();
+        // Reconcile (don't overwrite) rooms so a template-duplicated event
+        // keeps its rooms instead of being clobbered by Commander's local list.
+        await reconcileRoomsOnConnect();
         await pushProxyUrlToTracker();
         await pushVmixStatusToTracker();
         await checkConcurrentOperator();
@@ -2423,11 +2425,10 @@ async function connectToFirebase() {
       });
     }
 
-    // Initial push of rooms + proxy URL + vmix status after connecting.
-    // Previously this ran on every snapshot, which created a feedback loop
-    // (writing updatedAt re-triggered the snapshot listener) and caused the
-    // event dropdown to close itself mid-click.
-    await pushRoomsToTrackerEvent();
+    // Reconcile rooms on connect — adopt the event's rooms when present
+    // (template duplicate etc.), only push up when the event has none yet.
+    // Previously unconditional push clobbered template-inherited rooms.
+    await reconcileRoomsOnConnect();
     await pushProxyUrlToTracker();
     await pushVmixStatusToTracker();
 
@@ -2552,6 +2553,45 @@ async function pushRoomsToTrackerEvent() {
 async function pushToFirebase() {
   if (!appState.syncEnabled) return;
   await pushRoomsToTrackerEvent();
+}
+
+// Reconcile vmixRooms between this Commander and the linked tracker event
+// on first connect. Previously pushRoomsToTrackerEvent() unconditionally
+// overwrote the event's rooms with Commander's local list — which wiped
+// out rooms inherited from template duplicates. Now the event's remote
+// rooms win when they exist; Commander only pushes up when the event has
+// no rooms yet (fresh event, no template). Called once per connect; the
+// live subscription handles ongoing updates.
+async function reconcileRoomsOnConnect() {
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  try {
+    const snap = await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`)
+      .once('value');
+    const remote = snap.val();
+    if (Array.isArray(remote) && remote.length) {
+      // Remote already has rooms (e.g. inherited from a template duplicate,
+      // or set by another Commander). Adopt them locally — don't clobber.
+      const shape = remote
+        .map(r => ({ key: (r && r.key) || '', name: (r && r.name) || '', ip: (r && r.ip) || '' }))
+        .filter(r => r.key);
+      profile.rooms = shape;
+      window.profiles.save({ current: appState.current, profiles: appState.profiles });
+      if (appState.currentPage === 'rooms') renderRooms();
+      if (appState.currentPage === 'settings') renderSettings();
+      return;
+    }
+    // Remote has nothing — push Commander's local rooms up so the tracker
+    // has something to show on its Recording page.
+    await pushRoomsToTrackerEvent();
+  } catch (error) {
+    console.error('reconcileRoomsOnConnect failed:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'reconcileRoomsOnConnect: ' + (error && error.message || error), stack: error && error.stack || '', context: 'reconcileRoomsOnConnect' });
+    }
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────
