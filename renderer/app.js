@@ -2151,12 +2151,6 @@ function updateIdentityDisplay() {
   }
 
   display.innerHTML = html;
-
-  // Show "Re-match rooms" button only when identity is bound to a crew member.
-  const btnRematch = document.getElementById('btn-rematch-rooms');
-  if (btnRematch) {
-    btnRematch.style.display = appState.identity.crewId ? '' : 'none';
-  }
 }
 
 function applyRoleRestrictions() {
