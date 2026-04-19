@@ -119,18 +119,6 @@
       <div id="rooms-container" class="rooms-grid"></div>
     </div>
 
-    <!-- Events Page -->
-    <div id="page-events" class="page" data-title="Event Profiles">
-      <div class="profiles-container">
-        <div id="profiles-list"></div>
-        <div class="profiles-actions admin-only admin-only-block">
-          <button id="btn-new-profile" class="btn btn-ghost btn-new">+ New Profile</button>
-          <button id="btn-export-profiles" class="btn btn-ghost">Export Profiles</button>
-          <button id="btn-import-profiles" class="btn btn-ghost">Import Profiles</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Show Page (Run-of-Show Timeline) -->
     <div id="page-show" class="page" data-title="Run of Show">
       <div class="page-toolbar">
@@ -176,43 +164,6 @@
       </details>
     </div>
 
-    <!-- Tunnel Page -->
-    <div id="page-tunnel" class="page" data-title="Crew Access">
-      <div class="page-toolbar">
-        <button id="btn-restart-tunnel" class="btn btn-ghost btn-sm">Restart Tunnel</button>
-      </div>
-
-      <!-- Proxy status card -->
-      <div class="tunnel-card">
-        <div class="tunnel-card-title">HTTP Proxy</div>
-        <div class="tunnel-row">
-          <span id="tpage-proxy-indicator" class="proxy-dot pending">●</span>
-          <span id="tpage-proxy-label" style="color:var(--t2)">Starting…</span>
-        </div>
-        <div id="tpage-proxy-url" class="tunnel-url-text"></div>
-      </div>
-
-      <!-- Tunnel status card -->
-      <div class="tunnel-card">
-        <div class="tunnel-card-title">Cloudflare Tunnel (HTTPS)</div>
-        <div class="tunnel-row">
-          <span id="tpage-tunnel-indicator" class="proxy-dot pending">●</span>
-          <span id="tpage-tunnel-label" style="color:var(--t2)">Starting…</span>
-        </div>
-        <div id="tpage-tunnel-url" class="tunnel-url-text"></div>
-      </div>
-
-      <!-- QR code card -->
-      <div class="tunnel-card tunnel-qr-card">
-        <div class="tunnel-card-title">Crew Tracker QR Code</div>
-        <p style="color:var(--t2); font-size:14px; margin-bottom:16px;">Scan to open the tracker — proxy URL is pre-configured automatically.</p>
-        <div id="tpage-qr-container" class="tpage-qr-container">
-          <p style="color:var(--t3); font-size:14px;">Waiting for tunnel…</p>
-        </div>
-        <p id="tpage-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all;"></p>
-      </div>
-    </div>
-
     <!-- Settings Page -->
     <div id="page-settings" class="page" data-title="Settings">
       <div class="settings-container">
@@ -243,17 +194,64 @@
           </div>
         </div>
 
+        <!-- Events — formerly a separate tab. Lists live + archived profiles
+             (one per linked tracker event). Admins get Switch / Archive /
+             Delete actions inline on each row. -->
         <div class="settings-section">
-          <div class="settings-label">Event Profile Configuration</div>
-          <div id="settings-profile-name" class="settings-info"></div>
-          <button id="btn-rename-profile" class="btn btn-ghost">Rename Profile</button>
+          <div class="settings-label">Events</div>
+          <div class="profiles-container">
+            <div id="profiles-list"></div>
+            <div class="profiles-actions admin-only admin-only-block" style="margin-top:8px;">
+              <button id="btn-new-profile" class="btn btn-ghost btn-new btn-sm">+ New event</button>
+            </div>
+          </div>
         </div>
 
         <div class="settings-section">
-          <div class="settings-label">Rooms</div>
+          <div class="settings-label">vMix Rooms</div>
+          <div style="color:var(--t3); font-size:var(--fs-xs); margin-bottom:8px; line-height:1.5;">
+            Rooms for the currently-selected event. Commander pushes these to
+            the tracker's Recording page.
+          </div>
           <div id="settings-rooms-list"></div>
-          <button id="btn-add-room" class="btn btn-ghost">+ Add Room</button>
+          <button id="btn-add-room" class="btn btn-ghost btn-sm admin-only admin-only-inline-flex">+ Add room</button>
         </div>
+
+        <!-- Crew Access — formerly the Tunnel tab. Collapsible details; the
+             operator only needs to open this when diagnosing or re-scanning. -->
+        <details class="settings-section" id="settings-crew-access">
+          <summary style="cursor:pointer; display:flex; align-items:center; gap:8px; list-style:none; user-select:none;">
+            <span class="settings-label" style="margin-bottom:0;">Crew Access</span>
+            <span id="crew-access-status-chip" style="font-size:var(--fs-xs); color:var(--t3); font-weight:500; margin-left:auto;">—</span>
+          </summary>
+          <div style="margin-top:12px;">
+            <div class="tunnel-row" style="margin-bottom:6px;">
+              <span id="tpage-proxy-indicator" class="proxy-dot pending">●</span>
+              <span style="color:var(--t2); font-size:var(--fs-sm);">HTTP proxy: </span>
+              <span id="tpage-proxy-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
+            </div>
+            <div id="tpage-proxy-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
+
+            <div class="tunnel-row" style="margin-bottom:6px;">
+              <span id="tpage-tunnel-indicator" class="proxy-dot pending">●</span>
+              <span style="color:var(--t2); font-size:var(--fs-sm);">Cloudflare tunnel: </span>
+              <span id="tpage-tunnel-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
+            </div>
+            <div id="tpage-tunnel-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
+
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+              <button id="btn-restart-tunnel" class="btn btn-ghost btn-sm">Restart tunnel</button>
+            </div>
+
+            <div style="color:var(--t3); font-size:var(--fs-xs); margin-bottom:8px; line-height:1.5;">
+              QR code for crew to scan — opens the tracker with the proxy URL pre-configured.
+            </div>
+            <div id="tpage-qr-container" class="tpage-qr-container" style="text-align:center;">
+              <p style="color:var(--t3); font-size:var(--fs-sm);">Waiting for tunnel…</p>
+            </div>
+            <p id="tpage-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all; font-size:var(--fs-xs);"></p>
+          </div>
+        </details>
 
         <div class="settings-section">
           <div class="settings-label">Window Options</div>
@@ -265,7 +263,7 @@
 
         <div class="settings-section settings-about">
           <div class="settings-label">About</div>
-          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander v0.6.13</div>
+          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander <span class="header-version">v0.6.13</span></div>
         </div>
       </div>
     </div>
@@ -298,16 +296,6 @@
       </div>
       <span>Recording</span>
     </button>
-    <button class="nav-tab" data-page="events" role="tab" aria-label="Events">
-      <div class="nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="17" rx="2"/>
-          <path d="M3 10h18"/>
-          <path d="M8 2v4M16 2v4"/>
-        </svg>
-      </div>
-      <span>Events</span>
-    </button>
     <button class="nav-tab" data-page="show" role="tab" aria-label="Show">
       <div class="nav-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -324,16 +312,6 @@
         </svg>
       </div>
       <span>Log</span>
-    </button>
-    <button class="nav-tab" data-page="tunnel" role="tab" aria-label="Tunnel">
-      <div class="nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 20V10"/>
-          <path d="M18 20V4"/>
-          <path d="M6 20v-4"/>
-        </svg>
-      </div>
-      <span>Tunnel</span>
     </button>
     <button class="nav-tab" data-page="settings" role="tab" aria-label="Settings">
       <div class="nav-icon">

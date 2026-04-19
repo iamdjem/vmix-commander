@@ -198,21 +198,27 @@ function updateTunnelPage(status) {
 
   if (!dot) return;
 
+  // Summary chip for the Settings → Crew Access collapsible.
+  const chip = document.getElementById('crew-access-status-chip');
+
   if (status.running && status.url) {
     dot.className = 'proxy-dot running';
     label.textContent = 'Running';
     urlEl.textContent = status.url;
     renderTunnelQr(status.url);
+    if (chip) { chip.textContent = '🟢 Connected'; chip.style.color = 'var(--green)'; }
   } else if (status.error) {
     dot.className = 'proxy-dot failed';
     label.textContent = 'Failed';
     urlEl.textContent = status.error;
     if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Tunnel failed — click Restart</p>';
+    if (chip) { chip.textContent = '🔴 Failed'; chip.style.color = 'var(--red)'; }
   } else {
     dot.className = 'proxy-dot pending';
     label.textContent = 'Starting…';
     urlEl.textContent = '';
     if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Waiting for tunnel…</p>';
+    if (chip) { chip.textContent = '🟡 Starting…'; chip.style.color = 'var(--t3)'; }
   }
 }
 
@@ -473,8 +479,12 @@ function switchPage(page) {
     stopStatusRefresh();
   }
 
-  if (page === 'events') {
-    renderProfiles();
+  // events + tunnel folded into Settings; if something still tries to route
+  // to them, redirect to Settings so deep links / stale data-page attributes
+  // don't land on a missing page.
+  if (page === 'events' || page === 'tunnel') {
+    switchPage('settings');
+    return;
   }
 
   if (page === 'show') {
@@ -487,6 +497,9 @@ function switchPage(page) {
   }
 
   if (page === 'settings') {
+    // Render the Events list (formerly its own tab) inside the Settings
+    // Events section every time the page opens.
+    renderProfiles();
     renderSettings();
     updateIdentityDisplay();
     updateAccountDisplay();
@@ -516,20 +529,9 @@ function setupEventListeners() {
     });
   });
 
-  // Rename profile button
-  document.getElementById('btn-rename-profile').addEventListener('click', () => {
-    const profile = getCurrentProfile();
-    showModal('Rename Profile', profile.name, (name) => {
-      if (!name) return;
-      profile.name = name;
-      saveProfiles();
-      renderSettings();
-      updateProfileBadge();
-    });
-  });
-
   // Add room button
-  document.getElementById('btn-add-room').addEventListener('click', () => {
+  const btnAddRoom = document.getElementById('btn-add-room');
+  if (btnAddRoom) btnAddRoom.addEventListener('click', () => {
     const profile = getCurrentProfile();
     const key = 'room_' + Date.now();
     profile.rooms.push({ key, name: 'New Room', ip: '' });
@@ -544,8 +546,12 @@ function setupEventListeners() {
     await window.windowControls.toggleAlwaysOnTop(e.target.checked);
   });
 
-  // Export profiles button
-  document.getElementById('btn-export-profiles').addEventListener('click', async (e) => {
+  // Legacy export/import flows — folded out of the UI but kept as
+  // hidden-button-safe no-ops below. They predated tracker sync; everything
+  // is synced to Firebase now. Left here so existing code paths that might
+  // reference the elements don't crash.
+  const legacyExport = document.getElementById('btn-export-profiles');
+  if (legacyExport) legacyExport.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     setButtonLoading(btn, true, 'Exporting…');
     try {
@@ -560,8 +566,8 @@ function setupEventListeners() {
     }
   });
 
-  // Import profiles button
-  document.getElementById('btn-import-profiles').addEventListener('click', async (e) => {
+  const legacyImport = document.getElementById('btn-import-profiles');
+  if (legacyImport) legacyImport.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     setButtonLoading(btn, true, 'Importing…');
     try {
@@ -1635,7 +1641,11 @@ function deleteProfile(key) {
 function renderSettings() {
   const profile = getCurrentProfile();
 
-  document.getElementById('settings-profile-name').textContent = profile.name;
+  // Legacy "Event Profile Configuration" section was removed — the profile
+  // name now lives inline on each row of the Events section. Keep the
+  // field assignment guarded so it's a no-op when the element is gone.
+  const profileNameEl = document.getElementById('settings-profile-name');
+  if (profileNameEl) profileNameEl.textContent = profile.name;
   document.getElementById('chk-sync-enabled').checked = !!profile.syncEnabled;
   renderEventSelect();
 
