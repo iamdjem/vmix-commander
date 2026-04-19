@@ -565,6 +565,7 @@ function setupEventListeners() {
       unsubscribeFromTrackerErrors();
       unsubscribeFromTrackerCrew();
       unsubscribeFromTrackerSafetyLock();
+      unsubscribeFromTrackerVmixRooms();
       if (eventId) {
         await pushRoomsToTrackerEvent();
         await pushProxyUrlToTracker();
@@ -575,6 +576,7 @@ function setupEventListeners() {
         subscribeToTrackerErrors();
         subscribeToTrackerCrew();
         subscribeToTrackerSafetyLock();
+        subscribeToTrackerVmixRooms();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
         pushSafetyLockToTracker();
@@ -665,6 +667,21 @@ function renderRooms() {
   const profile = getCurrentProfile();
   const container = document.getElementById('rooms-container');
   container.innerHTML = '';
+
+  // If the active profile is archived (e.g. the linked tracker event was
+  // archived and no other live profile existed to switch to), don't show
+  // stale room cards — they're misleading. Surface an empty state with a
+  // clear next step.
+  if (profile && profile.archived) {
+    const liveCount = Object.values(appState.profiles || {}).filter(p => !p.archived).length;
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = liveCount > 0
+      ? `<strong>This profile is archived.</strong><br>Pick a live profile from the tabs above, or restore <em>${profile.name}</em> from the Events page.`
+      : `<strong>All profiles are archived.</strong><br>Restore one from the Events page or create a new profile to get started.`;
+    container.appendChild(empty);
+    return;
+  }
 
   let roomsToShow = profile.rooms;
 
@@ -2310,6 +2327,7 @@ async function connectToFirebase() {
     subscribeToTrackerErrors();
     subscribeToTrackerCrew();
     subscribeToTrackerSafetyLock();
+    subscribeToTrackerVmixRooms();
     pushRunOfShowToTracker();
     pushRoomLocksToTracker();
     pushSafetyLockToTracker();
@@ -2335,6 +2353,7 @@ function disconnectFromFirebase() {
   unsubscribeFromTrackerErrors();
   unsubscribeFromTrackerCrew();
   unsubscribeFromTrackerSafetyLock();
+  unsubscribeFromTrackerVmixRooms();
   setReadOnlyMode(false);
   trackerEvents = {};
   renderEventSelect();
@@ -2401,6 +2420,53 @@ async function pushRoomsToTrackerEvent() {
 async function pushToFirebase() {
   if (!appState.syncEnabled) return;
   await pushRoomsToTrackerEvent();
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Subscribe to remote vmixRooms — keeps profile.rooms aligned with the
+// Firebase source of truth so changes from another Commander instance
+// (or eventually the tracker) flow into this Commander automatically.
+// Echo prevention: we only update local state when the remote shape
+// differs from what we already have, so our own pushRoomsToTrackerEvent
+// writes round-trip without causing a re-write.
+// ────────────────────────────────────────────────────────────────────────
+let _trackerVmixRoomsRef = null;
+
+function subscribeToTrackerVmixRooms() {
+  unsubscribeFromTrackerVmixRooms();
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  _trackerVmixRoomsRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`);
+  _trackerVmixRoomsRef.on('value', (snap) => {
+    const remote = snap.val();
+    if (!Array.isArray(remote)) return;  // node missing or non-array — ignore
+
+    const localShape = (profile.rooms || []).map(r => ({ key: r.key || '', name: r.name || '', ip: r.ip || '' }));
+    const remoteShape = remote.map(r => ({ key: (r && r.key) || '', name: (r && r.name) || '', ip: (r && r.ip) || '' }));
+    // Compare ordered shapes; if identical, the snapshot is just our own
+    // write echoing back — no work to do.
+    if (JSON.stringify(localShape) === JSON.stringify(remoteShape)) return;
+
+    profile.rooms = remoteShape.filter(r => r.key);  // drop entries without a key — would corrupt vmixStatus
+    // Persist locally; do NOT re-push (would create an echo loop).
+    window.profiles.save({ current: appState.current, profiles: appState.profiles });
+    if (appState.currentPage === 'rooms') renderRooms();
+    if (appState.currentPage === 'settings') renderSettings();
+  }, (error) => {
+    console.error('Tracker vmixRooms subscription error:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'subscribeToTrackerVmixRooms: ' + (error && error.message || error), stack: error && error.stack || '', context: 'subscribeToTrackerVmixRooms' });
+    }
+  });
+}
+
+function unsubscribeFromTrackerVmixRooms() {
+  if (_trackerVmixRoomsRef) {
+    try { _trackerVmixRoomsRef.off(); } catch (_) { /* ignore */ }
+    _trackerVmixRoomsRef = null;
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────
