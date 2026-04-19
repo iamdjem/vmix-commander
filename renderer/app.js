@@ -2367,6 +2367,16 @@ function updateSyncStatus(message, connected) {
   statusEl.className = 'sync-status ' + (connected ? 'sync-connected' : 'sync-disconnected');
 }
 
+// Template events (e.g. "E3 Tracker Template") are stencils on the
+// tracker — hide them from the link dropdown and from any auto-mirror
+// flows. Match the tracker's isTemplateEvent() definition exactly.
+const TRACKER_TEMPLATE_EVENT_NAME = 'E3 Tracker Template';
+function isTemplateTrackerEvent(ev) {
+  if (!ev) return false;
+  if (ev.template === true) return true;
+  return String(ev.name || '').trim().toLowerCase() === TRACKER_TEMPLATE_EVENT_NAME.toLowerCase();
+}
+
 // Populate the event dropdown with live events from the tracker.
 // Skip rebuild when the option set hasn't changed — re-assigning innerHTML
 // closes an open dropdown and drops focus, which was making selection
@@ -2379,8 +2389,10 @@ function renderEventSelect() {
   const profile = getCurrentProfile();
   const currentLinkedId = profile.trackerEventId || '';
 
-  // Sort: live first (non-archived), newest updatedAt first
+  // Sort: live first (non-archived), newest updatedAt first.
+  // Template events are excluded entirely — they're stencils, not bookable.
   const events = Object.values(trackerEvents)
+    .filter(ev => !isTemplateTrackerEvent(ev))
     .sort((a, b) => {
       if (a.archived !== b.archived) return a.archived ? 1 : -1;
       return (b.updatedAt || 0) - (a.updatedAt || 0);
@@ -2483,6 +2495,7 @@ function mirrorTrackerArchiveStateToProfiles() {
     if (!profile || !profile.trackerEventId) return;
     const ev = trackerEvents[profile.trackerEventId];
     if (!ev) return;
+    if (isTemplateTrackerEvent(ev)) return;  // ignore template stencils
     const remoteArchived = !!ev.archived;
     if (!!profile.archived !== remoteArchived) {
       profile.archived = remoteArchived;
