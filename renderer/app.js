@@ -344,8 +344,11 @@ function renderConferenceTabs() {
   if (!list) return;
   list.innerHTML = '';
 
+  // Archived profiles are hidden from the tab strip — they live in the
+  // Archived section on the Events page and can be restored from there.
   Object.keys(appState.profiles).forEach(key => {
     const profile = appState.profiles[key];
+    if (profile.archived) return;
     const tab = document.createElement('button');
     tab.className = 'conference-tab' + (key === appState.current ? ' active' : '');
     tab.textContent = profile.name;
@@ -1364,10 +1367,15 @@ function renderProfiles() {
     return;
   }
 
-  profileKeys.forEach(key => {
+  const liveKeys = profileKeys.filter(k => !appState.profiles[k].archived);
+  const archivedKeys = profileKeys
+    .filter(k => appState.profiles[k].archived)
+    .sort((a, b) => (appState.profiles[b].archivedAt || 0) - (appState.profiles[a].archivedAt || 0));
+
+  const buildRow = (key) => {
     const profile = appState.profiles[key];
     const item = document.createElement('div');
-    item.className = 'profile-item' + (key === appState.current ? ' active' : '');
+    item.className = 'profile-item' + (key === appState.current ? ' active' : '') + (profile.archived ? ' archived' : '');
 
     const info = document.createElement('div');
     info.className = 'profile-info';
@@ -1390,7 +1398,8 @@ function renderProfiles() {
 
     const count = document.createElement('div');
     count.className = 'profile-count';
-    count.textContent = `${profile.rooms.length} room${profile.rooms.length === 1 ? '' : 's'}`;
+    count.textContent = `${profile.rooms.length} room${profile.rooms.length === 1 ? '' : 's'}` +
+      (profile.archived && profile.archivedAt ? ` · archived ${new Date(profile.archivedAt).toLocaleDateString()}` : '');
 
     info.appendChild(name);
     info.appendChild(count);
@@ -1398,7 +1407,7 @@ function renderProfiles() {
     const actions = document.createElement('div');
     actions.className = 'profile-actions';
 
-    if (key !== appState.current) {
+    if (!profile.archived && key !== appState.current) {
       const switchBtn = document.createElement('button');
       switchBtn.className = 'btn btn-primary';
       switchBtn.textContent = 'Switch';
@@ -1406,12 +1415,23 @@ function renderProfiles() {
       actions.appendChild(switchBtn);
     }
 
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'btn btn-ghost';
-    copyBtn.textContent = '📋';
-    copyBtn.title = 'Copy profile';
-    copyBtn.onclick = () => copyProfile(key);
-    actions.appendChild(copyBtn);
+    if (!profile.archived) {
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn-ghost';
+      copyBtn.textContent = '📋';
+      copyBtn.title = 'Copy profile';
+      copyBtn.onclick = () => copyProfile(key);
+      actions.appendChild(copyBtn);
+    }
+
+    const archiveBtn = document.createElement('button');
+    archiveBtn.className = 'btn btn-ghost';
+    archiveBtn.textContent = profile.archived ? 'Restore' : 'Archive';
+    archiveBtn.title = profile.archived
+      ? 'Restore — also unarchives the linked tracker event'
+      : 'Archive — also archives the linked tracker event';
+    archiveBtn.onclick = () => setProfileArchived(key, !profile.archived);
+    actions.appendChild(archiveBtn);
 
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'btn btn-danger';
@@ -1422,9 +1442,30 @@ function renderProfiles() {
 
     item.appendChild(info);
     item.appendChild(actions);
+    return item;
+  };
 
-    list.appendChild(item);
-  });
+  if (liveKeys.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No live profiles. Restore one from the archive below or create a new one.';
+    list.appendChild(empty);
+  } else {
+    liveKeys.forEach(k => list.appendChild(buildRow(k)));
+  }
+
+  if (archivedKeys.length) {
+    const details = document.createElement('details');
+    details.className = 'archived-profiles';
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span>Archived</span> <span class="archived-profiles-count">${archivedKeys.length}</span>`;
+    details.appendChild(summary);
+    const archList = document.createElement('div');
+    archList.className = 'archived-profiles-list';
+    archivedKeys.forEach(k => archList.appendChild(buildRow(k)));
+    details.appendChild(archList);
+    list.appendChild(details);
+  }
 }
 
 // Switch to a different profile
@@ -2247,6 +2288,9 @@ async function connectToFirebase() {
       trackerEventsRef.on('value', (snap) => {
         trackerEvents = snap.val() || {};
         renderEventSelect();
+        // Mirror remote archive state into any locally-linked profiles so
+        // the Events page + tab strip reflect tracker changes immediately.
+        mirrorTrackerArchiveStateToProfiles();
         updateSyncStatus('🟢 Connected', true);
       });
     }
@@ -2357,6 +2401,102 @@ async function pushRoomsToTrackerEvent() {
 async function pushToFirebase() {
   if (!appState.syncEnabled) return;
   await pushRoomsToTrackerEvent();
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Profile <-> tracker event archive sync (bidirectional)
+// ────────────────────────────────────────────────────────────────────────
+
+// Mirror remote `archived` state into any local profile linked to that event.
+// Called whenever the trackerEventsRef snapshot fires. Re-renders dependent
+// views and switches off an archived current profile if needed.
+function mirrorTrackerArchiveStateToProfiles() {
+  let changed = false;
+  let currentBecameArchived = false;
+  Object.entries(appState.profiles || {}).forEach(([key, profile]) => {
+    if (!profile || !profile.trackerEventId) return;
+    const ev = trackerEvents[profile.trackerEventId];
+    if (!ev) return;
+    const remoteArchived = !!ev.archived;
+    if (!!profile.archived !== remoteArchived) {
+      profile.archived = remoteArchived;
+      profile.archivedAt = remoteArchived ? (ev.archivedAt || Date.now()) : null;
+      changed = true;
+      if (remoteArchived && key === appState.current) currentBecameArchived = true;
+    }
+  });
+  if (!changed) return;
+  // If the live profile just got archived from elsewhere, jump to another
+  // live one so the operator isn't left looking at an "archived" workspace.
+  if (currentBecameArchived) {
+    const nextKey = Object.keys(appState.profiles).find(k => !appState.profiles[k].archived);
+    if (nextKey) {
+      appState.current = nextKey;
+      showToast('Linked event archived — switched to ' + appState.profiles[nextKey].name);
+    }
+  }
+  // Persist locally without an extra Firebase round-trip (we just got the
+  // truth from Firebase, no need to push it back).
+  window.profiles.save({ current: appState.current, profiles: appState.profiles });
+  updateProfileBadge();
+  if (appState.currentPage === 'events') renderProfiles();
+  if (appState.currentPage === 'rooms') renderRooms();
+}
+
+// Push a profile's archive flag to its linked tracker event. Uses update()
+// so only the archived/archivedAt/updatedAt fields are touched — the rest
+// of the event object (name, location, config) is owned by the tracker.
+async function pushProfileArchiveToTracker(profile) {
+  if (!profile || !profile.trackerEventId) return;
+  if (!appState.syncEnabled) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  try {
+    await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}`)
+      .update({
+        archived: !!profile.archived,
+        archivedAt: profile.archived ? (profile.archivedAt || Date.now()) : null,
+        updatedAt: Date.now()
+      });
+  } catch (error) {
+    console.error('Failed to push profile archive to tracker:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushProfileArchiveToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushProfileArchiveToTracker' });
+    }
+  }
+}
+
+// Toggle a profile's archive state. Local-only when the profile isn't
+// linked to a tracker event; pushes to Firebase when linked. Always
+// preserves at least one live profile.
+async function setProfileArchived(key, archived) {
+  const profile = appState.profiles[key];
+  if (!profile) return;
+  const next = !!archived;
+  if (!!profile.archived === next) return;
+
+  if (next) {
+    // Don't allow archiving the last live profile.
+    const liveCount = Object.values(appState.profiles).filter(p => !p.archived).length;
+    if (liveCount <= 1) {
+      showToast('Keep at least one live profile');
+      return;
+    }
+    // If archiving the active profile, switch to another live one first.
+    if (key === appState.current) {
+      const nextKey = Object.keys(appState.profiles).find(k => k !== key && !appState.profiles[k].archived);
+      if (nextKey) appState.current = nextKey;
+    }
+  }
+
+  profile.archived = next;
+  profile.archivedAt = next ? Date.now() : null;
+  await saveProfiles();
+  await pushProfileArchiveToTracker(profile);
+  updateProfileBadge();
+  if (appState.currentPage === 'events') renderProfiles();
+  if (appState.currentPage === 'rooms') renderRooms();
+  showToast(next ? `Archived '${profile.name}'` : `Restored '${profile.name}'`);
 }
 
 // Publish the Cloudflare tunnel URL so the tracker (served over HTTPS) can

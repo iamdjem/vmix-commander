@@ -829,6 +829,60 @@ body.readonly-mode { padding-top: 32px; }
   gap: var(--sp-2);
 }
 
+/* Archived state — dimmed so live profiles get visual priority */
+.profile-item.archived {
+  opacity: 0.55;
+  background: var(--s1);
+}
+.profile-item.archived .profile-name {
+  color: var(--t2);
+}
+
+/* Collapsible Archived section on the Events page */
+.archived-profiles {
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+  padding-top: var(--sp-3);
+}
+.archived-profiles > summary {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--t3);
+  padding: var(--sp-2) 0;
+  list-style: none;
+}
+.archived-profiles > summary::-webkit-details-marker { display: none; }
+.archived-profiles > summary::before {
+  content: '▸';
+  display: inline-block;
+  transition: transform 0.2s ease;
+  color: var(--t3);
+  font-size: var(--fs-xs);
+}
+.archived-profiles[open] > summary::before {
+  transform: rotate(90deg);
+}
+.archived-profiles-count {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--t3);
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-sm);
+  padding: 1px 6px;
+}
+.archived-profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
 /* Profile buttons — built on unified system via .btn classes in HTML/JS */
 .btn-new {
   border-style: dashed;
