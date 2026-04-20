@@ -2913,13 +2913,17 @@ async function autoLinkFirstLiveEventIfNeeded() {
   // Keep an existing link if it still points at a live, non-template event.
   if (profile.trackerEventId) {
     const existing = trackerEvents[profile.trackerEventId];
-    if (existing && !existing.archived && !isTemplateTrackerEvent(existing)) return;
+    if (existing && !existing.archived && !isTemplateTrackerEvent(existing)) {
+      console.log('[auto-link] keeping existing link to event', profile.trackerEventId, existing.name);
+      return;
+    }
   }
   const liveEvent = Object.values(trackerEvents)
     .filter(ev => ev && !ev.archived && !isTemplateTrackerEvent(ev))
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
   const nextId = liveEvent && liveEvent.id ? liveEvent.id : null;
   if (profile.trackerEventId === nextId) return;
+  console.log('[auto-link] switching profile link:', profile.trackerEventId, '→', nextId, liveEvent && liveEvent.name);
   profile.trackerEventId = nextId;
   await saveProfiles();
   renderEventSelect();
@@ -3522,12 +3526,14 @@ let _trackerCrewRef = null;
 function subscribeToTrackerCrew() {
   unsubscribeFromTrackerCrew();
   const profile = getCurrentProfile();
-  if (!profile.trackerEventId) return;
-  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  if (!profile.trackerEventId) { console.log('[crew-sub] skipped — no event linked'); return; }
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) { console.log('[crew-sub] skipped — Firebase not ready'); return; }
 
+  console.log('[crew-sub] subscribing to event', profile.trackerEventId);
   _trackerCrewRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/crew`);
   _trackerCrewRef.on('value', (snap) => {
     const val = snap.val();
+    console.log('[crew-sub] snapshot received:', val ? (Array.isArray(val) ? val.length : Object.keys(val).length) + ' entries' : 'null');
     // Tracker stores crew as an array; tolerate object-shape writes too.
     if (Array.isArray(val)) {
       trackerCrewList = val.filter(Boolean);
@@ -3536,11 +3542,22 @@ function subscribeToTrackerCrew() {
     } else {
       trackerCrewList = [];
     }
-    // If the identity modal is open, re-render only its crew dropdown —
-    // avoid blowing away a name the user is mid-typing.
+    // If the legacy identity modal is open, re-render its crew dropdown.
     const modal = document.getElementById('identity-modal');
     if (modal && modal.classList.contains('is-open') && typeof renderTrackerCrewDropdown === 'function') {
       renderTrackerCrewDropdown();
+    }
+    // If the sign-in gate's crew picker is currently visible, re-render it
+    // so a late-arriving roster populates without requiring a reopen.
+    const gate = document.getElementById('signin-gate');
+    const crewStep = document.getElementById('signin-step-crew-identity');
+    if (gate && gate.style.display !== 'none' && crewStep && crewStep.style.display !== 'none') {
+      const prevCrew = _signinChosenCrew;
+      renderSignInCrewList();
+      if (prevCrew) {
+        const match = document.querySelector(`.signin-crew-option[data-crew-id="${prevCrew}"]`);
+        if (match) signInPickCrew(prevCrew, match);
+      }
     }
     // assignedRooms is now resolved live from this list, so a crew-config
     // change (renamed room, added member) should re-render dependent views.
