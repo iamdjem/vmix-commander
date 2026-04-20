@@ -2632,8 +2632,38 @@ async function signInFinishCrew() {
   } else {
     const crew = (trackerCrewList || []).find(c => c && c.id === _signinChosenCrew);
     if (crew) {
-      const roomNames = (crew.rooms || []).map(r => r && r.name).filter(Boolean);
-      const keys = roomNames.map(findRoomKeyByName).filter(Boolean);
+      // Crew's rooms come from the tracker's config.crew[].rooms (checklist
+      // per crew member). These often don't exist in profile.rooms (which
+      // mirrors config.vmixRooms) — admins fill them separately. Upsert the
+      // missing ones so the Operator filter has something to match. Creates
+      // rooms without an IP; a Director can fill IPs later from Settings.
+      const profile = getCurrentProfile();
+      if (!Array.isArray(profile.rooms)) profile.rooms = [];
+      const crewRooms = (crew.rooms || []).filter(r => r && r.name && String(r.name).trim());
+      const keys = [];
+      let profileMutated = false;
+      crewRooms.forEach(cr => {
+        const normName = String(cr.name).trim();
+        const existing = profile.rooms.find(r =>
+          (r.name || '').trim().toLowerCase() === normName.toLowerCase()
+        );
+        if (existing) {
+          keys.push(existing.key);
+        } else {
+          const newKey = 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+          profile.rooms.push({ key: newKey, name: normName, ip: '' });
+          keys.push(newKey);
+          profileMutated = true;
+        }
+      });
+      if (profileMutated) {
+        await saveProfiles();
+        // Keep tracker's config.vmixRooms aligned so other operators /
+        // Directors see the same room list on their next connect.
+        if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
+          try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal */ }
+        }
+      }
       identity = { name: crew.name, role: 'Operator', crewId: crew.id, assignedRooms: keys };
     } else {
       identity = { name: 'Observer', role: 'Observer' };
