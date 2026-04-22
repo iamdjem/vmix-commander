@@ -652,7 +652,11 @@ function setupEventListeners() {
     const eventId = e.target.value;
     const profile = getCurrentProfile();
     profile.trackerEventId = eventId || null;
+    // Rename the profile tab to match the bound event so the top tab and
+    // the Settings dropdown can't drift apart.
+    syncProfileNameToLinkedEvent(profile);
     await saveProfiles();
+    updateProfileBadge();
     if (appState.syncEnabled) {
       // Rebuild event-scoped subscriptions / presence / initial pushes.
       stopPresenceHeartbeat();
@@ -2579,7 +2583,9 @@ async function signInPickEvent(eventId) {
   if (!profile) return;
   if (profile.trackerEventId !== eventId) {
     profile.trackerEventId = eventId;
+    syncProfileNameToLinkedEvent(profile);
     await saveProfiles();
+    updateProfileBadge();
     if (typeof unsubscribeFromTrackerCrew === 'function') unsubscribeFromTrackerCrew();
     if (typeof unsubscribeFromTrackerVmixRooms === 'function') unsubscribeFromTrackerVmixRooms();
     if (typeof unsubscribeFromTrackerAudit === 'function') unsubscribeFromTrackerAudit();
@@ -3094,6 +3100,21 @@ async function pushToFirebase() {
 // (archived/deleted). Matches the tracker's "first live event" auto-pick
 // so operators don't have to manually link via Settings → Events before
 // seeing crew + rooms.
+// Keep profile.name aligned with the linked tracker event's name. Returns
+// true when the local profile was mutated, so callers can avoid redundant
+// saves. Called whenever the linked trackerEventId changes OR the remote
+// event's name changes — matches the user's mental model that "the tab
+// names the event it's bound to".
+function syncProfileNameToLinkedEvent(profile) {
+  if (!profile || !profile.trackerEventId) return false;
+  const ev = trackerEvents[profile.trackerEventId];
+  if (!ev) return false;
+  const desired = (ev.name && String(ev.name).trim()) || 'Untitled event';
+  if (profile.name === desired) return false;
+  profile.name = desired;
+  return true;
+}
+
 async function autoLinkFirstLiveEventIfNeeded() {
   const profile = getCurrentProfile();
   if (!profile) return;
@@ -3112,8 +3133,13 @@ async function autoLinkFirstLiveEventIfNeeded() {
   if (profile.trackerEventId === nextId) return;
   console.log('[auto-link] switching profile link:', profile.trackerEventId, '→', nextId, liveEvent && liveEvent.name);
   profile.trackerEventId = nextId;
+  // Auto-link switches the bound event — the profile's display name has to
+  // follow, otherwise the conference tab shows the old event's name while
+  // the Settings dropdown shows the new one (visible mismatch).
+  syncProfileNameToLinkedEvent(profile);
   await saveProfiles();
   renderEventSelect();
+  updateProfileBadge();
 }
 
 // Reconcile vmixRooms between this Commander and the linked tracker event
@@ -3224,6 +3250,9 @@ function mirrorTrackerArchiveStateToProfiles() {
       changed = true;
       if (remoteArchived && key === appState.current) currentBecameArchived = true;
     }
+    // Mirror tracker-side renames so the conference tab always reflects
+    // the bound event's current name.
+    if (syncProfileNameToLinkedEvent(profile)) changed = true;
   });
   if (!changed) return;
   // If the live profile just got archived from elsewhere, jump to another
