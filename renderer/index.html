@@ -30,7 +30,7 @@
     <div class="signin-gate-inner">
       <div class="signin-brand">
         <div class="signin-title">vMix Commander</div>
-        <div class="signin-version"><span id="signin-version-label">v0.6.19</span></div>
+        <div class="signin-version"><span id="signin-version-label">v0.6.20</span></div>
       </div>
       <div class="signin-subtitle">Sign in to continue</div>
 
@@ -57,7 +57,19 @@
         </div>
       </div>
 
-      <!-- Step 3a: admin identity (name only) -->
+      <!-- Step 3: event picker — only shown when 2+ live events exist.
+           Sits between password and identity so crew picks the right
+           event's roster, and admins can scope their session. -->
+      <div id="signin-step-event" class="signin-step" style="display:none;">
+        <div class="signin-step-title">Which event?</div>
+        <div class="signin-step-hint">Pick the live event you're working on. You can switch events later from Settings.</div>
+        <div id="signin-event-list" class="signin-crew-list"></div>
+        <div class="signin-actions">
+          <button id="signin-event-back" class="btn btn-ghost" type="button">Back</button>
+        </div>
+      </div>
+
+      <!-- Step 4a: admin identity (name only) -->
       <div id="signin-step-admin-identity" class="signin-step" style="display:none;">
         <div class="signin-step-title">Your name</div>
         <div class="signin-step-hint">Attributed on every action in the audit log.</div>
@@ -68,7 +80,7 @@
         </div>
       </div>
 
-      <!-- Step 3b: crew identity (pick from roster) -->
+      <!-- Step 4b: crew identity (pick from chosen event's roster) -->
       <div id="signin-step-crew-identity" class="signin-step" style="display:none;">
         <div class="signin-step-title">Who are you?</div>
         <div class="signin-step-hint" id="signin-crew-hint">Pick yourself from this event's crew list. Your rooms will be scoped automatically.</div>
@@ -85,7 +97,7 @@
   <div id="top-header" class="top-header">
     <div class="header-left">
       <div id="header-page-title" class="header-title">Room Control</div>
-      <span class="header-version">v0.6.19</span>
+      <span class="header-version">v0.6.20</span>
     </div>
     <div class="header-right">
       <div id="proxy-status-inline" class="proxy-status-inline">
@@ -263,7 +275,7 @@
 
         <div class="settings-section settings-about">
           <div class="settings-label">About</div>
-          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander <span class="header-version">v0.6.19</span></div>
+          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander <span class="header-version">v0.6.20</span></div>
         </div>
       </div>
     </div>

@@ -342,13 +342,27 @@ function setupSignInGateListeners() {
   const admBack = document.getElementById('signin-admin-back');
   const admInput = document.getElementById('signin-admin-name');
   if (admDone) admDone.addEventListener('click', () => signInFinishAdmin());
-  if (admBack) admBack.addEventListener('click', () => signInShowStep('password'));
+  if (admBack) admBack.addEventListener('click', () => {
+    if (signInLiveEvents().length > 1) { signInRenderEventList(); signInShowStep('event'); }
+    else if (appState.identity) hideSignInGate();
+    else signInShowStep('password');
+  });
   if (admInput) admInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') signInFinishAdmin(); });
   // Crew identity step
   const crewDone = document.getElementById('signin-crew-done');
   const crewBack = document.getElementById('signin-crew-back');
   if (crewDone) crewDone.addEventListener('click', () => signInFinishCrew());
-  if (crewBack) crewBack.addEventListener('click', () => signInShowStep('password'));
+  if (crewBack) crewBack.addEventListener('click', () => {
+    if (signInLiveEvents().length > 1) { signInRenderEventList(); signInShowStep('event'); }
+    else if (appState.identity) hideSignInGate();
+    else signInShowStep('password');
+  });
+  // Event picker step
+  const evtBack = document.getElementById('signin-event-back');
+  if (evtBack) evtBack.addEventListener('click', () => {
+    if (appState.identity) hideSignInGate();
+    else signInShowStep('password');
+  });
 
   // Header identity chip — click toggles menu
   const chipBtn = document.getElementById('header-identity-btn');
@@ -776,6 +790,24 @@ function renderRooms() {
     const keys = effectiveAssignedRooms(appState.identity);
     if (keys.length) {
       roomsToShow = profile.rooms.filter(r => keys.includes(r.key));
+    } else if (appState.identity.crewId) {
+      // Crew-bound Operator whose assigned rooms don't (yet) exist in this
+      // profile. Show an empty state like the tracker does — previously we
+      // fell through to "all rooms" which leaked other people's rooms to
+      // an unassigned operator.
+      const crew = (trackerCrewList || []).find(c => c && c.id === appState.identity.crewId);
+      const crewRoomNames = crew && Array.isArray(crew.rooms)
+        ? crew.rooms.map(r => r && r.name).filter(Boolean)
+        : [];
+      const roomsHint = crewRoomNames.length
+        ? `Your assigned rooms aren't configured in vMix: ${crewRoomNames.map(n => `'${n}'`).join(', ')}. Ask a Director to add them, or change identity.`
+        : `You have no rooms assigned yet. Ask a Director to update the crew list, or change identity.`;
+      container.innerHTML =
+        '<div class="empty-state">' +
+        '<strong>No rooms assigned</strong><br>' +
+        roomsHint +
+        '</div>';
+      return;
     }
   }
 
@@ -2490,6 +2522,7 @@ function signInShowStep(stepName) {
   const steps = {
     role:          document.getElementById('signin-step-role'),
     password:      document.getElementById('signin-step-password'),
+    event:         document.getElementById('signin-step-event'),
     adminIdentity: document.getElementById('signin-step-admin-identity'),
     crewIdentity:  document.getElementById('signin-step-crew-identity')
   };
@@ -2499,6 +2532,84 @@ function signInShowStep(stepName) {
     if (stepName === 'password') document.getElementById('signin-pw-input')?.focus();
     else if (stepName === 'adminIdentity') document.getElementById('signin-admin-name')?.focus();
   }, 30);
+}
+
+// Enumerate live (non-archived, non-template) events, newest-first. Mirrors
+// the tracker-side helper so the event picker matches.
+function signInLiveEvents() {
+  return Object.values(trackerEvents || {})
+    .filter(ev => ev && ev.id && !ev.archived && !isTemplateTrackerEvent(ev))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function signInRenderEventList() {
+  const list = document.getElementById('signin-event-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const events = signInLiveEvents();
+  if (!events.length) {
+    const empty = document.createElement('div');
+    empty.className = 'signin-step-hint';
+    empty.style.padding = '8px 0';
+    empty.textContent = 'No live events yet. Ask an admin to create one.';
+    list.appendChild(empty);
+    return;
+  }
+  const profile = getCurrentProfile();
+  const currentLinkedId = profile && profile.trackerEventId;
+  events.forEach(ev => {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = 'signin-crew-option' + (ev.id === currentLinkedId ? ' selected' : '');
+    opt.dataset.eventId = ev.id;
+    const sub = [ev.location, ev.dateLabel].filter(Boolean).join(' · ');
+    opt.innerHTML =
+      '<span class="signin-crew-option-name">' + escapeHtmlForSignin(ev.name || 'Untitled event') + '</span>' +
+      (sub ? '<span class="signin-crew-option-rooms">' + escapeHtmlForSignin(sub) + '</span>' : '');
+    opt.onclick = () => signInPickEvent(ev.id);
+    list.appendChild(opt);
+  });
+}
+
+// Link the current profile to the chosen event, refresh event-scoped
+// subscriptions + reconcile rooms, then advance to the right identity step.
+async function signInPickEvent(eventId) {
+  if (!eventId) return;
+  const profile = getCurrentProfile();
+  if (!profile) return;
+  if (profile.trackerEventId !== eventId) {
+    profile.trackerEventId = eventId;
+    await saveProfiles();
+    if (typeof unsubscribeFromTrackerCrew === 'function') unsubscribeFromTrackerCrew();
+    if (typeof unsubscribeFromTrackerVmixRooms === 'function') unsubscribeFromTrackerVmixRooms();
+    if (typeof unsubscribeFromTrackerAudit === 'function') unsubscribeFromTrackerAudit();
+    if (typeof unsubscribeFromTrackerErrors === 'function') unsubscribeFromTrackerErrors();
+    if (typeof unsubscribeFromTrackerSafetyLock === 'function') unsubscribeFromTrackerSafetyLock();
+    if (typeof reconcileRoomsOnConnect === 'function') {
+      try { await reconcileRoomsOnConnect(); } catch (_) { /* non-fatal */ }
+    }
+    if (typeof subscribeToTrackerCrew === 'function') subscribeToTrackerCrew();
+    if (typeof subscribeToTrackerVmixRooms === 'function') subscribeToTrackerVmixRooms();
+    if (typeof subscribeToTrackerAudit === 'function') subscribeToTrackerAudit();
+    if (typeof subscribeToTrackerErrors === 'function') subscribeToTrackerErrors();
+    if (typeof subscribeToTrackerSafetyLock === 'function') subscribeToTrackerSafetyLock();
+    if (typeof renderEventSelect === 'function') renderEventSelect();
+  }
+  // Wait briefly for the new event's crew list to arrive (crew path only).
+  if (_signinChosenRole === 'user') {
+    const waitStart = Date.now();
+    while (!trackerCrewList.length && Date.now() - waitStart < 1500) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+  if (_signinChosenRole === 'admin') {
+    const nm = document.getElementById('signin-admin-name');
+    if (nm && !nm.value) nm.value = appState.identity?.name || '';
+    signInShowStep('adminIdentity');
+  } else {
+    renderSignInCrewList();
+    signInShowStep('crewIdentity');
+  }
 }
 
 function signInSelectRole(role) {
@@ -2559,6 +2670,13 @@ async function signInVerifyPassword() {
   }
   if (btn) { btn.disabled = false; btn.textContent = 'Continue'; }
 
+  // Route through event picker when 2+ live events exist. connectToFirebase
+  // auto-linked first-live; the picker lets the user correct that.
+  if (signInLiveEvents().length > 1) {
+    signInRenderEventList();
+    signInShowStep('event');
+    return;
+  }
   if (_signinChosenRole === 'admin') {
     signInShowStep('adminIdentity');
   } else {
@@ -2624,6 +2742,64 @@ async function signInFinishAdmin() {
   if (appState.currentPage === 'settings') { renderSettings(); updateIdentityDisplay(); updateAccountDisplay(); }
 }
 
+// Ensure the given crew member's rooms exist in the current profile. Crew
+// rooms come from the tracker's config.crew[].rooms (checklist per member);
+// profile.rooms mirrors config.vmixRooms (the vMix-authoritative list).
+// Those don't always line up — this helper upserts by case-insensitive name,
+// creates missing rooms (empty IP), and returns the matching profile keys.
+// Writes back to profile storage + pushes to tracker's config.vmixRooms when
+// sync is enabled so everyone converges on the same room list.
+async function reconcileCrewRoomsIntoProfile(crew) {
+  if (!crew || !Array.isArray(crew.rooms)) return [];
+  const profile = getCurrentProfile();
+  if (!profile) return [];
+  if (!Array.isArray(profile.rooms)) profile.rooms = [];
+  const crewRooms = crew.rooms.filter(r => r && r.name && String(r.name).trim());
+  const keys = [];
+  let profileMutated = false;
+  crewRooms.forEach(cr => {
+    const normName = String(cr.name).trim();
+    const existing = profile.rooms.find(r =>
+      (r.name || '').trim().toLowerCase() === normName.toLowerCase()
+    );
+    if (existing) {
+      keys.push(existing.key);
+    } else {
+      const newKey = 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      profile.rooms.push({ key: newKey, name: normName, ip: '' });
+      keys.push(newKey);
+      profileMutated = true;
+    }
+  });
+  if (profileMutated) {
+    await saveProfiles();
+    if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
+      try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal */ }
+    }
+  }
+  return keys;
+}
+
+// Re-reconcile the current Operator's rooms against the live crew roster.
+// Called on crew-list snapshots so a resumed session (Operator signed in on
+// a previous version, or crew config changed remotely) picks up room
+// additions without requiring a re-pick from the gate.
+async function reconcileCurrentOperatorRooms() {
+  const id = appState.identity;
+  if (!id || id.role !== 'Operator' || !id.crewId) return;
+  if (!Array.isArray(trackerCrewList) || !trackerCrewList.length) return;
+  const crew = trackerCrewList.find(c => c && c.id === id.crewId);
+  if (!crew) return;
+  const keys = await reconcileCrewRoomsIntoProfile(crew);
+  const existing = Array.isArray(id.assignedRooms) ? id.assignedRooms : [];
+  const changed = keys.length !== existing.length || keys.some(k => !existing.includes(k));
+  if (changed) {
+    id.assignedRooms = keys;
+    await saveIdentity(id);
+  }
+  if (appState.currentPage === 'rooms') renderRooms();
+}
+
 async function signInFinishCrew() {
   if (!_signinChosenCrew) return;
   let identity;
@@ -2632,38 +2808,7 @@ async function signInFinishCrew() {
   } else {
     const crew = (trackerCrewList || []).find(c => c && c.id === _signinChosenCrew);
     if (crew) {
-      // Crew's rooms come from the tracker's config.crew[].rooms (checklist
-      // per crew member). These often don't exist in profile.rooms (which
-      // mirrors config.vmixRooms) — admins fill them separately. Upsert the
-      // missing ones so the Operator filter has something to match. Creates
-      // rooms without an IP; a Director can fill IPs later from Settings.
-      const profile = getCurrentProfile();
-      if (!Array.isArray(profile.rooms)) profile.rooms = [];
-      const crewRooms = (crew.rooms || []).filter(r => r && r.name && String(r.name).trim());
-      const keys = [];
-      let profileMutated = false;
-      crewRooms.forEach(cr => {
-        const normName = String(cr.name).trim();
-        const existing = profile.rooms.find(r =>
-          (r.name || '').trim().toLowerCase() === normName.toLowerCase()
-        );
-        if (existing) {
-          keys.push(existing.key);
-        } else {
-          const newKey = 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-          profile.rooms.push({ key: newKey, name: normName, ip: '' });
-          keys.push(newKey);
-          profileMutated = true;
-        }
-      });
-      if (profileMutated) {
-        await saveProfiles();
-        // Keep tracker's config.vmixRooms aligned so other operators /
-        // Directors see the same room list on their next connect.
-        if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
-          try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal */ }
-        }
-      }
+      const keys = await reconcileCrewRoomsIntoProfile(crew);
       identity = { name: crew.name, role: 'Operator', crewId: crew.id, assignedRooms: keys };
     } else {
       identity = { name: 'Observer', role: 'Observer' };
@@ -2678,14 +2823,20 @@ async function signInFinishCrew() {
 }
 
 function signInReopenForChangeIdentity() {
-  // Reopen the sign-in gate but skip straight to the identity picker step
-  // for the role we're already signed in as — no password re-entry.
+  // Reopen the sign-in gate but skip straight past auth. If multiple live
+  // events exist, present the event picker first so "Change identity" can
+  // also scope to a different event in one gesture.
   if (!currentRole) { showSignInGate(); return; }
   const gate = document.getElementById('signin-gate');
   if (!gate) return;
   _signinChosenRole = currentRole;
   gate.style.display = 'flex';
   gate.setAttribute('aria-hidden', 'false');
+  if (signInLiveEvents().length > 1) {
+    signInRenderEventList();
+    signInShowStep('event');
+    return;
+  }
   if (currentRole === 'admin') {
     const nm = document.getElementById('signin-admin-name');
     if (nm) nm.value = appState.identity?.name || '';
@@ -2788,6 +2939,12 @@ async function connectToFirebase() {
           // On subsequent snapshots (event created/deleted elsewhere), keep
           // the current profile pointed at a live event.
           if (settled) autoLinkFirstLiveEventIfNeeded();
+          // Repopulate the sign-in event picker if it's the visible step.
+          const gate = document.getElementById('signin-gate');
+          const evStep = document.getElementById('signin-step-event');
+          if (gate && gate.style.display !== 'none' && evStep && evStep.style.display !== 'none') {
+            signInRenderEventList();
+          }
           updateSyncStatus('🟢 Connected', true);
           if (!settled) { settled = true; resolve(); }
         }, (error) => {
@@ -3588,6 +3745,13 @@ function subscribeToTrackerCrew() {
         const match = document.querySelector(`.signin-crew-option[data-crew-id="${prevCrew}"]`);
         if (match) signInPickCrew(prevCrew, match);
       }
+    }
+    // For resumed Operator sessions (signed in on a previous version, or
+    // crew config changed remotely), reconcile the crew's rooms into
+    // profile.rooms + refresh identity.assignedRooms so the filter has
+    // real keys. Fire-and-forget — it re-renders on success.
+    if (typeof reconcileCurrentOperatorRooms === 'function') {
+      reconcileCurrentOperatorRooms().catch(function () { /* non-fatal */ });
     }
     // assignedRooms is now resolved live from this list, so a crew-config
     // change (renamed room, added member) should re-render dependent views.
