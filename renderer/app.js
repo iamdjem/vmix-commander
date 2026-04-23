@@ -431,8 +431,70 @@ function renderConferenceTabs() {
   if (!list) return;
   list.innerHTML = '';
 
-  // Archived profiles are hidden from the tab strip — they live in the
-  // Archived section on the Events page and can be restored from there.
+  // Admin: render a tab per live tracker event — mirrors the tracker UI
+  // so an admin overseeing multiple venues can jump between them the same
+  // way. Clicking a tab switches to (or lazily creates) the local profile
+  // linked to that event.
+  // Crew: only ever show the currently-linked event as a single, inert
+  // tab. Crew work one event at a time, and exposing switches mid-show
+  // invites accidental taps on the wrong room.
+  if (typeof isAdmin === 'function' && isAdmin()) {
+    const events = (typeof signInLiveEvents === 'function') ? signInLiveEvents() : [];
+    if (events.length) {
+      const currentEventId = (getCurrentProfile() || {}).trackerEventId || null;
+      const eventIds = new Set(events.map(ev => ev.id));
+      events.forEach(ev => {
+        const tab = document.createElement('button');
+        tab.className = 'conference-tab' + (ev.id === currentEventId ? ' active' : '');
+        tab.textContent = ev.name || 'Untitled event';
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', ev.id === currentEventId ? 'true' : 'false');
+        tab.onclick = () => {
+          if (ev.id !== currentEventId) switchToTrackerEvent(ev.id);
+        };
+        list.appendChild(tab);
+      });
+      // Orphan profiles — local profiles not linked to any live tracker
+      // event. Appended so admin doesn't lose access to offline/legacy
+      // workspaces. Labeled with a · prefix to distinguish them visually
+      // from tracker-backed tabs.
+      Object.keys(appState.profiles).forEach(key => {
+        const profile = appState.profiles[key];
+        if (!profile || profile.archived) return;
+        if (profile.trackerEventId && eventIds.has(profile.trackerEventId)) return;
+        const tab = document.createElement('button');
+        tab.className = 'conference-tab' + (key === appState.current ? ' active' : '');
+        tab.textContent = '· ' + profile.name;
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', key === appState.current ? 'true' : 'false');
+        tab.title = 'Local profile (not linked to a live tracker event)';
+        tab.onclick = () => { if (key !== appState.current) switchProfile(key); };
+        list.appendChild(tab);
+      });
+      return;
+    }
+    // Fallback: no tracker events visible yet (offline, not connected,
+    // or initial snapshot pending) — render local profile tabs so admin
+    // isn't stuck staring at an empty strip.
+    renderLocalProfileTabs(list);
+    return;
+  }
+
+  // Crew path — single inert tab naming the bound event/profile.
+  const profile = getCurrentProfile();
+  if (!profile) return;
+  const tab = document.createElement('button');
+  tab.className = 'conference-tab active';
+  tab.textContent = profile.name;
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-selected', 'true');
+  tab.disabled = true;
+  list.appendChild(tab);
+}
+
+function renderLocalProfileTabs(list) {
+  // Archived profiles are hidden — they live in the Archived section on
+  // the Events page and can be restored from there.
   Object.keys(appState.profiles).forEach(key => {
     const profile = appState.profiles[key];
     if (profile.archived) return;
@@ -442,12 +504,93 @@ function renderConferenceTabs() {
     tab.setAttribute('role', 'tab');
     tab.setAttribute('aria-selected', key === appState.current ? 'true' : 'false');
     tab.onclick = () => {
-      if (key !== appState.current) {
-        switchProfile(key);
-      }
+      if (key !== appState.current) switchProfile(key);
     };
     list.appendChild(tab);
   });
+}
+
+// Find an existing non-archived profile linked to the given tracker event.
+// Returns null when no match — callers typically create a fresh profile.
+function findProfileKeyForEvent(eventId) {
+  if (!eventId) return null;
+  return Object.keys(appState.profiles).find(k => {
+    const p = appState.profiles[k];
+    return p && !p.archived && p.trackerEventId === eventId;
+  }) || null;
+}
+
+// Admin tab-click handler. Jumps to the profile linked to the chosen
+// tracker event, creating one on the fly when none exists yet. When sync
+// is live, tears down the outgoing event's Firebase subs and rebuilds
+// them against the new event so audit/crew/rooms/presence all re-scope.
+async function switchToTrackerEvent(eventId) {
+  if (!eventId) return;
+  let targetKey = findProfileKeyForEvent(eventId);
+  if (!targetKey) {
+    targetKey = 'profile_' + Date.now();
+    const ev = trackerEvents[eventId];
+    appState.profiles[targetKey] = {
+      name: (ev && ev.name && String(ev.name).trim()) || 'Untitled event',
+      trackerEventId: eventId,
+      rooms: []  // reconcileRoomsOnConnect will adopt the event's rooms
+    };
+  }
+
+  if (targetKey === appState.current) {
+    renderConferenceTabs();
+    return;
+  }
+
+  const hadLiveSubs = appState.syncEnabled && !!firebaseDb && !!(trackerAuth && trackerAuth.currentUser);
+  if (hadLiveSubs) {
+    stopPresenceHeartbeat();
+    unsubscribeFromTrackerAudit();
+    unsubscribeFromTrackerErrors();
+    unsubscribeFromTrackerCrew();
+    unsubscribeFromTrackerSafetyLock();
+    unsubscribeFromTrackerVmixRooms();
+  }
+
+  appState.current = targetKey;
+  await saveProfiles();
+  updateProfileBadge();
+
+  if (hadLiveSubs) {
+    const profile = getCurrentProfile();
+    if (profile && profile.trackerEventId) {
+      try {
+        await reconcileRoomsOnConnect();
+        await pushProxyUrlToTracker();
+        await pushVmixStatusToTracker();
+        await checkConcurrentOperator();
+        if (!_readOnlyMode) startPresenceHeartbeat();
+        subscribeToTrackerAudit();
+        subscribeToTrackerErrors();
+        subscribeToTrackerCrew();
+        subscribeToTrackerSafetyLock();
+        subscribeToTrackerVmixRooms();
+        pushRunOfShowToTracker();
+        pushRoomLocksToTracker();
+        pushSafetyLockToTracker();
+      } catch (err) {
+        console.error('switchToTrackerEvent: resubscribe failed:', err);
+        if (typeof pushErrorToTracker === 'function') {
+          pushErrorToTracker({ message: 'switchToTrackerEvent: ' + (err && err.message || err), stack: err && err.stack || '', context: 'switchToTrackerEvent' });
+        }
+      }
+    }
+  }
+
+  if (appState.currentPage === 'rooms') renderRooms();
+  else if (appState.currentPage === 'events') renderProfiles();
+  else if (appState.currentPage === 'show') renderShowTimeline();
+  else if (appState.currentPage === 'log') renderAuditLog();
+  else if (appState.currentPage === 'settings') renderSettings();
+
+  const ev = trackerEvents[eventId];
+  showToast('Switched to ' + ((ev && ev.name) || 'event'));
+  if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
 }
 
 // Navigation
@@ -2418,6 +2561,9 @@ function setStoredRole(role) {
 function applyRoleToBody(role) {
   document.body.classList.toggle('role-admin', role === 'admin');
   document.body.classList.toggle('role-user',  role === 'user');
+  // Tab strip composition depends on role (admin: per-event tabs, crew:
+  // single inert tab), so refresh it whenever the role toggles.
+  if (typeof renderConferenceTabs === 'function') renderConferenceTabs();
 }
 
 function loadFirebaseScripts() {
@@ -2939,6 +3085,10 @@ async function connectToFirebase() {
         trackerEventsRef.on('value', (snap) => {
           trackerEvents = snap.val() || {};
           renderEventSelect();
+          // Admin tab strip is driven by live tracker events — refresh it
+          // whenever the event set or an event's name changes so tabs
+          // appear/disappear/rename in lockstep with Firebase.
+          renderConferenceTabs();
           // Mirror remote archive state into any locally-linked profiles so
           // the Events page + tab strip reflect tracker changes immediately.
           mirrorTrackerArchiveStateToProfiles();
