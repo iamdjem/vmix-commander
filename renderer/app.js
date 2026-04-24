@@ -4523,5 +4523,21 @@ function stopShowAutoTrigger() {
   }
 }
 
-// Initialize on load
-init();
+// Initialize on load. Any throw here previously left the app as a blank
+// screen — the default HTML has `page-rooms` active with an empty
+// `rooms-container`, so an init crash just looks like "nothing happened".
+// Surface the error on-screen so the user isn't stuck guessing.
+init().catch((err) => {
+  try {
+    const el = document.getElementById('rooms-container');
+    if (el) {
+      el.innerHTML =
+        '<div class="empty-state" style="color:var(--red);text-align:left;white-space:pre-wrap;">' +
+        '<strong>Commander failed to start.</strong>\n\n' +
+        'Error: ' + (err && err.message ? err.message : String(err)) + '\n\n' +
+        (err && err.stack ? err.stack : '') +
+        '</div>';
+    }
+  } catch (_) { /* never re-throw from the error path */ }
+  console.error('init() failed:', err);
+});
