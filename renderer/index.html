@@ -30,7 +30,7 @@
     <div class="signin-gate-inner">
       <div class="signin-brand">
         <div class="signin-title">vMix Commander</div>
-        <div class="signin-version"><span id="signin-version-label">v0.6.22</span></div>
+        <div class="signin-version"><span id="signin-version-label">v0.6.23</span></div>
       </div>
       <div class="signin-subtitle">Sign in to continue</div>
 
@@ -97,7 +97,7 @@
   <div id="top-header" class="top-header">
     <div class="header-left">
       <div id="header-page-title" class="header-title">Room Control</div>
-      <span class="header-version">v0.6.22</span>
+      <span class="header-version">v0.6.23</span>
     </div>
     <div class="header-right">
       <div id="proxy-status-inline" class="proxy-status-inline">
@@ -137,6 +137,46 @@
         <button id="btn-add-show-item" class="btn btn-ghost">+ Add Item</button>
       </div>
       <div id="show-timeline" class="show-timeline"></div>
+    </div>
+
+    <!-- Share Page — surfaces proxy/tunnel status + QR for crew. Same
+         content that used to live under Settings → Crew Access, promoted
+         to a top-level tab so it mirrors the tracker's Share tab. -->
+    <div id="page-share" class="page" data-title="Share">
+      <div class="share-container">
+        <div class="share-intro">
+          Crew members scan the QR or open the link below to access the
+          tracker with this Commander's proxy pre-configured.
+        </div>
+
+        <div class="share-status-block">
+          <div class="tunnel-row" style="margin-bottom:6px;">
+            <span id="share-proxy-indicator" class="proxy-dot pending">●</span>
+            <span style="color:var(--t2); font-size:var(--fs-sm);">HTTP proxy: </span>
+            <span id="share-proxy-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
+          </div>
+          <div id="share-proxy-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
+
+          <div class="tunnel-row" style="margin-bottom:6px;">
+            <span id="share-tunnel-indicator" class="proxy-dot pending">●</span>
+            <span style="color:var(--t2); font-size:var(--fs-sm);">Cloudflare tunnel: </span>
+            <span id="share-tunnel-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
+          </div>
+          <div id="share-tunnel-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+            <button id="btn-share-copy-url" class="btn btn-ghost btn-sm">Copy tracker link</button>
+            <button id="btn-share-restart-tunnel" class="btn btn-ghost btn-sm">Restart tunnel</button>
+          </div>
+        </div>
+
+        <div class="share-qr-block">
+          <div id="share-qr-container" class="tpage-qr-container" style="text-align:center;">
+            <p style="color:var(--t3); font-size:var(--fs-sm);">Waiting for tunnel…</p>
+          </div>
+          <p id="share-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all; font-size:var(--fs-xs);"></p>
+        </div>
+      </div>
     </div>
 
     <!-- Log Page (Audit Log) -->
@@ -229,41 +269,7 @@
           <button id="btn-add-room" class="btn btn-ghost btn-sm admin-only admin-only-inline-flex">+ Add room</button>
         </div>
 
-        <!-- Crew Access — formerly the Tunnel tab. Collapsible details; the
-             operator only needs to open this when diagnosing or re-scanning. -->
-        <details class="settings-section" id="settings-crew-access">
-          <summary style="cursor:pointer; display:flex; align-items:center; gap:8px; list-style:none; user-select:none;">
-            <span class="settings-label" style="margin-bottom:0;">Crew Access</span>
-            <span id="crew-access-status-chip" style="font-size:var(--fs-xs); color:var(--t3); font-weight:500; margin-left:auto;">—</span>
-          </summary>
-          <div style="margin-top:12px;">
-            <div class="tunnel-row" style="margin-bottom:6px;">
-              <span id="tpage-proxy-indicator" class="proxy-dot pending">●</span>
-              <span style="color:var(--t2); font-size:var(--fs-sm);">HTTP proxy: </span>
-              <span id="tpage-proxy-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
-            </div>
-            <div id="tpage-proxy-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
-
-            <div class="tunnel-row" style="margin-bottom:6px;">
-              <span id="tpage-tunnel-indicator" class="proxy-dot pending">●</span>
-              <span style="color:var(--t2); font-size:var(--fs-sm);">Cloudflare tunnel: </span>
-              <span id="tpage-tunnel-label" style="color:var(--t2); font-size:var(--fs-sm);">starting…</span>
-            </div>
-            <div id="tpage-tunnel-url" class="tunnel-url-text" style="margin-bottom:12px;"></div>
-
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-              <button id="btn-restart-tunnel" class="btn btn-ghost btn-sm">Restart tunnel</button>
-            </div>
-
-            <div style="color:var(--t3); font-size:var(--fs-xs); margin-bottom:8px; line-height:1.5;">
-              QR code for crew to scan — opens the tracker with the proxy URL pre-configured.
-            </div>
-            <div id="tpage-qr-container" class="tpage-qr-container" style="text-align:center;">
-              <p style="color:var(--t3); font-size:var(--fs-sm);">Waiting for tunnel…</p>
-            </div>
-            <p id="tpage-qr-url" class="tunnel-url-text" style="margin-top:12px; word-break:break-all; font-size:var(--fs-xs);"></p>
-          </div>
-        </details>
+        <!-- Crew Access moved to the Share tab (bottom nav). -->
 
         <div class="settings-section">
           <div class="settings-label">Window Options</div>
@@ -275,7 +281,7 @@
 
         <div class="settings-section settings-about">
           <div class="settings-label">About</div>
-          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander <span class="header-version">v0.6.22</span></div>
+          <div style="color: var(--t3); font-size: var(--fs-sm);">vMix Commander <span class="header-version">v0.6.23</span></div>
         </div>
       </div>
     </div>
@@ -315,6 +321,18 @@
         </svg>
       </div>
       <span>Show</span>
+    </button>
+    <button class="nav-tab" data-page="share" role="tab" aria-label="Share">
+      <div class="nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="18" cy="5" r="3"/>
+          <circle cx="6" cy="12" r="3"/>
+          <circle cx="18" cy="19" r="3"/>
+          <line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/>
+          <line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/>
+        </svg>
+      </div>
+      <span>Share</span>
     </button>
     <button class="nav-tab" data-page="log" id="nav-tab-log" role="tab" aria-label="Log">
       <div class="nav-icon">
@@ -454,6 +472,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="qrcode.min.js"></script>
+  <script src="../tracker-config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

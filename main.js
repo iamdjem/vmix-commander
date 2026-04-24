@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { TRACKER_FB_ROOT, TRACKER_FB_DATABASE_URL } = require('./tracker-config');
 
 // ─── Proxy State ────────────────────────────────────────────────────────────
 const PROXY_PORT = 8097;
@@ -22,11 +23,121 @@ function getLocalIp() {
   return '127.0.0.1';
 }
 
+// Hosts we're willing to proxy schedule pages for. Keep conservative — this
+// endpoint runs behind a public Cloudflare tunnel, so a wide-open proxy is
+// an SSRF + abuse hazard. Add domains as new providers come up.
+const SCHEDULE_PROXY_HOST_ALLOWLIST = [
+  'sched.com', 'sched.org',
+  'eventbrite.com', 'eventbrite.co.uk',
+  'events.linuxfoundation.org',
+  'cncf.io',
+  'whova.com',
+  'hopin.com',
+  'bizzabo.com',
+  'swoogo.com',
+  'swapcard.com',
+  'pathable.co',
+  'docs.google.com',
+  'notion.site'
+];
+
+function isScheduleProxyHostAllowed(hostname) {
+  const h = (hostname || '').toLowerCase();
+  return SCHEDULE_PROXY_HOST_ALLOWLIST.some(allowed =>
+    h === allowed || h.endsWith('.' + allowed)
+  );
+}
+
+function handleScheduleProxy(parsedUrl, res) {
+  const targetRaw = parsedUrl.searchParams.get('url');
+  if (!targetRaw) {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ error: 'Missing ?url=<https-url>' }));
+    return;
+  }
+  let target;
+  try {
+    target = new URL(targetRaw);
+  } catch (_) {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ error: 'Invalid url' }));
+    return;
+  }
+  if (target.protocol !== 'https:') {
+    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ error: 'https:// URLs only' }));
+    return;
+  }
+  if (!isScheduleProxyHostAllowed(target.hostname)) {
+    res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ error: `Host not allowed: ${target.hostname}` }));
+    return;
+  }
+
+  const upstream = https.get(target.toString(), {
+    timeout: 8000,
+    headers: { 'User-Agent': 'vmix-commander-schedule-proxy' }
+  }, (upRes) => {
+    // Rewrite headers: drop frame-busting, keep content-type/charset so
+    // the browser decodes the body correctly.
+    const headers = {};
+    for (const [k, v] of Object.entries(upRes.headers)) {
+      const lk = k.toLowerCase();
+      if (lk === 'x-frame-options') continue;
+      if (lk === 'content-security-policy') continue;
+      if (lk === 'content-security-policy-report-only') continue;
+      // Skip hop-by-hop and the encoding header — we pass the raw body through.
+      if (lk === 'transfer-encoding' || lk === 'connection') continue;
+      headers[k] = v;
+    }
+    headers['Access-Control-Allow-Origin'] = '*';
+    headers['X-Commander-Proxied'] = 'schedule';
+    res.writeHead(upRes.statusCode || 200, headers);
+    upRes.pipe(res);
+  });
+
+  upstream.on('error', (err) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  });
+
+  upstream.on('timeout', () => {
+    upstream.destroy();
+    if (!res.headersSent) {
+      res.writeHead(504, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Upstream timeout' }));
+    }
+  });
+}
+
 function startProxyServer() {
   proxyState.localIp = getLocalIp();
 
   const proxy = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, `http://localhost:${PROXY_PORT}`);
+
+    // Capability descriptor — lets the tracker detect what this Commander
+    // tunnel exposes without having to probe each path.
+    if (parsedUrl.pathname === '/capabilities') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({
+        vmixProxy: '/vmix-proxy?ip=<ip>&fn=<function>',
+        scheduleProxy: '/schedule-proxy?url=<https-url>',
+        version: app.getVersion()
+      }));
+      return;
+    }
+
+    // Schedule-proxy endpoint: fetch an external page, strip frame-busting
+    // headers, relay to the tracker so its Schedule tab can iframe-embed
+    // schedules from providers (sched.com, eventbrite, …) that otherwise
+    // send X-Frame-Options: DENY. HTTPS-only, GET-only.
+    if (parsedUrl.pathname === '/schedule-proxy') {
+      handleScheduleProxy(parsedUrl, res);
+      return;
+    }
 
     // Only handle /vmix-proxy
     if (parsedUrl.pathname !== '/vmix-proxy') {
@@ -175,7 +286,7 @@ function stopTunnel() {
 
 function pushTunnelUrlToFirebase(url) {
   // Firebase REST API — no SDK needed, no auth required for this public DB
-  const fbUrl = 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app/e3-kc26-x7k9m/vmix_proxy_url.json';
+  const fbUrl = `${TRACKER_FB_DATABASE_URL}/${TRACKER_FB_ROOT}/vmix_proxy_url.json`;
   const body = JSON.stringify(url || null);
   const req = https.request(fbUrl, {
     method: 'PUT',

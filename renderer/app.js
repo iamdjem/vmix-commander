@@ -165,12 +165,16 @@ function updateProxyStatusBar(status) {
 // ─── Tunnel Status ────────────────────────────────────────────────────────────
 let _currentTunnelUrl = '';
 
+function buildTrackerShareUrl(proxyUrl) {
+  return `https://iamdjem.github.io/kubecon-tracker/?proxy=${encodeURIComponent(proxyUrl)}`;
+}
+
 function renderTunnelQr(url) {
-  const container = document.getElementById('tpage-qr-container');
-  const urlLabel  = document.getElementById('tpage-qr-url');
+  const container = document.getElementById('share-qr-container');
+  const urlLabel  = document.getElementById('share-qr-url');
   if (!container) return;
 
-  const trackerUrl = `https://iamdjem.github.io/kubecon-tracker/?proxy=${encodeURIComponent(url)}`;
+  const trackerUrl = buildTrackerShareUrl(url);
   container.innerHTML = '';
   new QRCode(container, {
     text: trackerUrl,
@@ -190,42 +194,35 @@ function updateTunnelPage(status) {
     pushProxyUrlToTracker();
   }
 
-  // Update tunnel page indicators
-  const dot   = document.getElementById('tpage-tunnel-indicator');
-  const label = document.getElementById('tpage-tunnel-label');
-  const urlEl = document.getElementById('tpage-tunnel-url');
-  const qrBox = document.getElementById('tpage-qr-container');
+  const dot   = document.getElementById('share-tunnel-indicator');
+  const label = document.getElementById('share-tunnel-label');
+  const urlEl = document.getElementById('share-tunnel-url');
+  const qrBox = document.getElementById('share-qr-container');
 
   if (!dot) return;
-
-  // Summary chip for the Settings → Crew Access collapsible.
-  const chip = document.getElementById('crew-access-status-chip');
 
   if (status.running && status.url) {
     dot.className = 'proxy-dot running';
     label.textContent = 'Running';
     urlEl.textContent = status.url;
     renderTunnelQr(status.url);
-    if (chip) { chip.textContent = '🟢 Connected'; chip.style.color = 'var(--green)'; }
   } else if (status.error) {
     dot.className = 'proxy-dot failed';
     label.textContent = 'Failed';
     urlEl.textContent = status.error;
     if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Tunnel failed — click Restart</p>';
-    if (chip) { chip.textContent = '🔴 Failed'; chip.style.color = 'var(--red)'; }
   } else {
     dot.className = 'proxy-dot pending';
     label.textContent = 'Starting…';
     urlEl.textContent = '';
     if (qrBox) qrBox.innerHTML = '<p style="color:var(--t3);font-size:14px;">Waiting for tunnel…</p>';
-    if (chip) { chip.textContent = '🟡 Starting…'; chip.style.color = 'var(--t3)'; }
   }
 }
 
 function updateProxyPage(status) {
-  const dot   = document.getElementById('tpage-proxy-indicator');
-  const label = document.getElementById('tpage-proxy-label');
-  const urlEl = document.getElementById('tpage-proxy-url');
+  const dot   = document.getElementById('share-proxy-indicator');
+  const label = document.getElementById('share-proxy-label');
+  const urlEl = document.getElementById('share-proxy-url');
   if (!dot) return;
 
   if (status.running) {
@@ -257,12 +254,28 @@ if (window.proxy) {
 document.addEventListener('DOMContentLoaded', () => {
   applyControlsLock();
 
-  const restartBtn = document.getElementById('btn-restart-tunnel');
+  const restartBtn = document.getElementById('btn-share-restart-tunnel');
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
       if (window.tunnel) {
         updateTunnelPage({ running: false, url: '', error: '' });
         window.tunnel.restart();
+      }
+    });
+  }
+
+  const copyBtn = document.getElementById('btn-share-copy-url');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      if (!_currentTunnelUrl) {
+        showToast('No tunnel yet');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(buildTrackerShareUrl(_currentTunnelUrl));
+        showToast('Tracker link copied');
+      } catch (_) {
+        showToast('Copy failed');
       }
     });
   }
@@ -649,6 +662,14 @@ function switchPage(page) {
 
   if (page === 'show') {
     renderShowTimeline();
+  }
+
+  if (page === 'share') {
+    // Re-render with the latest status so opening the tab never shows stale
+    // "starting…" placeholders if the tunnel came up before this tab was
+    // ever visited.
+    if (window.proxy) window.proxy.getStatus().then(updateProxyPage);
+    if (window.tunnel) window.tunnel.getStatus().then(updateTunnelPage);
   }
 
   if (page === 'log') {
@@ -2522,14 +2543,16 @@ async function clearAuditLog() {
 // FIREBASE CLOUD SYNC
 // ========================================
 
-// Tracker Firebase config (shared with kubecon-tracker)
+// Tracker Firebase config (shared with kubecon-tracker). The databaseURL and
+// event root come from tracker-config.js (loaded before app.js) so main.js
+// and renderer always agree on which project + event prefix to talk to.
 const TRACKER_FB_CONFIG = {
   apiKey: 'AIzaSyAo1IeN6TnsKC48_ZJG6BWxke_T1l8Ke2g',
   authDomain: 'kubecon-tracker.firebaseapp.com',
-  databaseURL: 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app',
+  databaseURL: window.TRACKER_FB_DATABASE_URL,
   projectId: 'kubecon-tracker'
 };
-const TRACKER_FB_ROOT = 'e3-kc26-x7k9m';
+const TRACKER_FB_ROOT = window.TRACKER_FB_ROOT;
 // Auth credentials shared with the Crew Tracker. Two accounts:
 //   admin@ → can do everything (archive events, edit config)
 //   user@  → standard crew, no admin-gated UI
