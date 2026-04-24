@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
-const { TRACKER_FB_ROOT, TRACKER_FB_DATABASE_URL } = require('./tracker-config');
+const { TRACKER_FB_ROOT, TRACKER_FB_DATABASE_URL } = require('./renderer/tracker-config');
 
 // ─── Proxy State ────────────────────────────────────────────────────────────
 const PROXY_PORT = 8097;

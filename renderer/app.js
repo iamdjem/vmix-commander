@@ -2543,16 +2543,17 @@ async function clearAuditLog() {
 // FIREBASE CLOUD SYNC
 // ========================================
 
-// Tracker Firebase config (shared with kubecon-tracker). The databaseURL and
-// event root come from tracker-config.js (loaded before app.js) so main.js
-// and renderer always agree on which project + event prefix to talk to.
+// Tracker Firebase config (shared with kubecon-tracker). databaseURL and
+// event root come from tracker-config.js (loaded before app.js). Fall back
+// to baked-in values if that script fails to load for any reason —
+// Firebase init with databaseURL=undefined would take the whole app down.
 const TRACKER_FB_CONFIG = {
   apiKey: 'AIzaSyAo1IeN6TnsKC48_ZJG6BWxke_T1l8Ke2g',
   authDomain: 'kubecon-tracker.firebaseapp.com',
-  databaseURL: window.TRACKER_FB_DATABASE_URL,
+  databaseURL: window.TRACKER_FB_DATABASE_URL || 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app',
   projectId: 'kubecon-tracker'
 };
-const TRACKER_FB_ROOT = window.TRACKER_FB_ROOT;
+const TRACKER_FB_ROOT = window.TRACKER_FB_ROOT || 'e3-kc26-x7k9m';
 // Auth credentials shared with the Crew Tracker. Two accounts:
 //   admin@ → can do everything (archive events, edit config)
 //   user@  → standard crew, no admin-gated UI
