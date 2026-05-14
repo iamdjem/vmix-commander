@@ -462,9 +462,8 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // TEMPORARY: auto-open DevTools so the 0.6.23/24 blank-screen regression
-  // can be diagnosed from the installed build. Remove once fixed.
-  mainWindow.webContents.openDevTools({ mode: 'detach' });
+  // Open DevTools in development
+  // mainWindow.webContents.openDevTools();
 
   mainWindow.on('closed', () => {
     mainWindow = null;

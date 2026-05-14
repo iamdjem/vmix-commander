@@ -2553,7 +2553,9 @@ const TRACKER_FB_CONFIG = {
   databaseURL: window.TRACKER_FB_DATABASE_URL || 'https://kubecon-tracker-default-rtdb.europe-west1.firebasedatabase.app',
   projectId: 'kubecon-tracker'
 };
-const TRACKER_FB_ROOT = window.TRACKER_FB_ROOT || 'e3-kc26-x7k9m';
+// TRACKER_FB_ROOT is declared by tracker-config.js (loaded first); classic
+// <script> tags share the global lexical scope so it's already in scope here.
+// Redeclaring with const threw SyntaxError and broke the renderer (0.6.23/24).
 // Auth credentials shared with the Crew Tracker. Two accounts:
 //   admin@ → can do everything (archive events, edit config)
 //   user@  → standard crew, no admin-gated UI
