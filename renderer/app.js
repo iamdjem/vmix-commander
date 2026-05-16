@@ -1875,9 +1875,17 @@ function renderSettings() {
     ipInput.className = 'room-ip-input';
     ipInput.placeholder = '10.x.x.x';
     ipInput.value = room.ip;
-    ipInput.onchange = () => {
+    ipInput.onchange = async () => {
       room.ip = ipInput.value.trim();
-      saveProfiles();
+      await saveProfiles();
+      // Propagate the IP to Firebase so other Commanders (and the tracker)
+      // pick it up. Without this, an IP edit only ever lived in local
+      // profile storage and never reached config.vmixRooms — so a second
+      // Commander never saw it. The subscribeToTrackerVmixRooms echo guard
+      // handles the round-trip back to us.
+      if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
+        try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal — retries on next sync */ }
+      }
     };
 
     const deleteBtn = document.createElement('button');
@@ -2913,6 +2921,12 @@ async function signInFinishAdmin() {
   const name = (nameInput?.value || '').trim();
   if (!name) { nameInput?.focus(); return; }
   await saveIdentity({ name, role: 'Director' });
+  // Admin sees ALL rooms — adopt the full crew-room union from the tracker
+  // (the source of truth). Without this, admin only ever saw whatever was
+  // in config.vmixRooms, which drifts; crew sign-in already reconciles.
+  if (typeof reconcileAllCrewRoomsIntoProfile === 'function') {
+    try { await reconcileAllCrewRoomsIntoProfile(); } catch (_) { /* non-fatal */ }
+  }
   hideSignInGate();
   updateHeaderIdentityChip();
   applyRoleRestrictions();
@@ -2976,6 +2990,60 @@ async function reconcileCurrentOperatorRooms() {
     await saveIdentity(id);
   }
   if (appState.currentPage === 'rooms') renderRooms();
+}
+
+// Admin/Director equivalent of reconcileCrewRoomsIntoProfile: rebuild
+// profile.rooms to exactly the union of ALL crew members' rooms (the
+// tracker Setup page's config.crew[].rooms — the real source of truth).
+// Crucially, existing {key, ip} are preserved for rooms that survive by
+// case-insensitive name, so this never clears configured IPs. Prunes
+// rooms not assigned to any crew member (e.g. stale placeholders) so
+// admin sees the same set crew collectively sees, instead of whatever
+// drifted into config.vmixRooms. Returns the resulting room keys.
+async function reconcileAllCrewRoomsIntoProfile() {
+  const profile = getCurrentProfile();
+  if (!profile) return [];
+  if (!Array.isArray(trackerCrewList) || !trackerCrewList.length) return [];
+  if (!Array.isArray(profile.rooms)) profile.rooms = [];
+
+  const seen = new Set();
+  const orderedNames = [];
+  trackerCrewList.forEach(c => {
+    (c && Array.isArray(c.rooms) ? c.rooms : []).forEach(r => {
+      const n = (r && r.name) ? String(r.name).trim() : '';
+      if (!n || seen.has(n.toLowerCase())) return;
+      seen.add(n.toLowerCase());
+      orderedNames.push(n);
+    });
+  });
+  if (!orderedNames.length) return [];  // no crew rooms yet — don't wipe local
+
+  const byName = {};
+  profile.rooms.forEach(r => {
+    if (r && r.name) byName[String(r.name).trim().toLowerCase()] = r;
+  });
+  const next = orderedNames.map(n => {
+    const ex = byName[n.toLowerCase()];
+    if (ex) return { key: ex.key, name: n, ip: ex.ip || '' };  // preserve key+ip
+    return {
+      key: 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+      name: n,
+      ip: ''
+    };
+  });
+
+  const before = JSON.stringify(profile.rooms.map(r => ({ key: r.key, name: r.name, ip: r.ip || '' })));
+  const after = JSON.stringify(next);
+  if (before === after) return next.map(r => r.key);  // no change — skip churn
+
+  profile.rooms = next;
+  await saveProfiles();
+  if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
+    try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal — retries on next sync */ }
+  }
+  if (appState.currentPage === 'rooms') renderRooms();
+  if (appState.currentPage === 'settings') renderSettings();
+  return next.map(r => r.key);
 }
 
 async function signInFinishCrew() {
@@ -3957,6 +4025,14 @@ function subscribeToTrackerCrew() {
     // real keys. Fire-and-forget — it re-renders on success.
     if (typeof reconcileCurrentOperatorRooms === 'function') {
       reconcileCurrentOperatorRooms().catch(function () { /* non-fatal */ });
+    }
+    // Admin/Director equivalent: keep profile.rooms aligned with the full
+    // crew-room union whenever the roster arrives or changes. Without this,
+    // an admin who signed in before the crew snapshot landed would never
+    // reconcile (reconcileCurrentOperatorRooms is Operator-only).
+    if (appState.identity && appState.identity.role === 'Director'
+        && typeof reconcileAllCrewRoomsIntoProfile === 'function') {
+      reconcileAllCrewRoomsIntoProfile().catch(function () { /* non-fatal */ });
     }
     // assignedRooms is now resolved live from this list, so a crew-config
     // change (renamed room, added member) should re-render dependent views.
