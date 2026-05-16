@@ -159,10 +159,12 @@ function startProxyServer() {
       ? `http://${ip}:8088/api/?Function=${encodeURIComponent(fn)}`
       : `http://${ip}:8088/api`;
 
+    const _t0 = Date.now();
     const vmixReq = http.get(targetUrl, { timeout: 4000 }, (vmixRes) => {
       let body = '';
       vmixRes.on('data', (chunk) => { body += chunk; });
       vmixRes.on('end', () => {
+        console.log(`[vmix-proxy] ${ip} ${fn || 'status'} -> HTTP ${vmixRes.statusCode} (${Date.now() - _t0}ms)`);
         res.writeHead(vmixRes.statusCode || 200, {
           'Content-Type': vmixRes.headers['content-type'] || 'text/xml',
           'Access-Control-Allow-Origin': '*'
@@ -172,17 +174,19 @@ function startProxyServer() {
     });
 
     vmixReq.on('error', (err) => {
+      console.error(`[vmix-proxy] ${ip} ${fn || 'status'} -> FAILED: ${err.code || ''} ${err.message} (${Date.now() - _t0}ms)`);
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-        res.end(JSON.stringify({ error: err.message }));
+        res.end(JSON.stringify({ error: `${err.code ? err.code + ': ' : ''}${err.message} (target ${ip}:8088)` }));
       }
     });
 
     vmixReq.on('timeout', () => {
       vmixReq.destroy();
+      console.error(`[vmix-proxy] ${ip} ${fn || 'status'} -> TIMEOUT after ${Date.now() - _t0}ms (target ${ip}:8088 unreachable)`);
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-        res.end(JSON.stringify({ error: 'Timeout connecting to vMix' }));
+        res.end(JSON.stringify({ error: `Timeout — ${ip}:8088 unreachable from this Commander (check IP / vMix Web Controller / subnet)` }));
       }
     });
   });
