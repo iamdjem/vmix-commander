@@ -1847,7 +1847,21 @@ function renderSettings() {
   const roomsList = document.getElementById('settings-rooms-list');
   roomsList.innerHTML = '';
 
-  profile.rooms.forEach((room, index) => {
+  // Mirror the Recording page's visibility rule: an Operator (e3crew)
+  // only sees + configures their own assigned rooms here; Director
+  // (e3admin) and Observer see the full list. Index is resolved against
+  // the real profile.rooms so delete/splice stays correct.
+  let roomsForSettings = profile.rooms;
+  if (appState.identity && appState.identity.role === 'Operator') {
+    const _keys = (typeof effectiveAssignedRooms === 'function')
+      ? effectiveAssignedRooms(appState.identity) : [];
+    roomsForSettings = _keys.length
+      ? profile.rooms.filter(r => _keys.includes(r.key))
+      : [];
+  }
+
+  roomsForSettings.forEach((room) => {
+    const index = profile.rooms.indexOf(room);
     const item = document.createElement('div');
     item.className = 'settings-room-item';
     item.dataset.roomKey = room.key;
