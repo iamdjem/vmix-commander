@@ -3773,29 +3773,46 @@ async function pushVmixStatusToTracker() {
 let _presenceInterval = null;
 let _presenceRef = null;
 
+let _presenceControllerRef = null;
 function startPresenceHeartbeat() {
   stopPresenceHeartbeat();
   const profile = getCurrentProfile();
   if (!appState.syncEnabled || !profile.trackerEventId) return;
   if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
 
-  _presenceRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/controller`);
+  const base = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}`;
+  // Per-Commander presence cell: each instance owns presence/<id>, so two
+  // Commanders never overwrite each other, and a disconnect only removes
+  // THIS Commander's cell — not the shared one. This is what stops the
+  // active↔not-connected flicker when >1 Commander is connected.
+  _presenceRef = firebaseDb.ref(`${base}/presence/${COMMANDER_ID}`);
   try { _presenceRef.onDisconnect().remove(); } catch (_) { /* ignore */ }
 
+  // Legacy shared `controller` node kept for backward compat (the
+  // concurrent-operator check + un-upgraded trackers still read it).
+  // CRITICAL: no onDisconnect().remove() here — a blip must never wipe
+  // the shared node (that was the flicker). Staleness via lastHeartbeat
+  // already handles "this Commander is gone".
+  _presenceControllerRef = firebaseDb.ref(`${base}/controller`);
+
   const writePresence = () => {
-    if (!_presenceRef) return;
     const payload = {
       commanderId: COMMANDER_ID,
       operator: identityOrPlaceholder(),
       lastHeartbeat: Date.now(),
       safetyLocked: !!controlsLocked
     };
-    _presenceRef.set(payload).catch((error) => {
-      console.error('Presence heartbeat write failed:', error);
-      if (typeof pushErrorToTracker === 'function') {
-        pushErrorToTracker({ message: 'presenceHeartbeat: ' + (error && error.message || error), stack: error && error.stack || '', context: 'presenceHeartbeat' });
-      }
-    });
+    if (_presenceRef) {
+      _presenceRef.set(payload).catch((error) => {
+        console.error('Presence heartbeat write failed:', error);
+        if (typeof pushErrorToTracker === 'function') {
+          pushErrorToTracker({ message: 'presenceHeartbeat: ' + (error && error.message || error), stack: error && error.stack || '', context: 'presenceHeartbeat' });
+        }
+      });
+    }
+    if (_presenceControllerRef) {
+      _presenceControllerRef.set(payload).catch(() => { /* compat mirror — non-fatal */ });
+    }
   };
 
   writePresence();
@@ -3809,9 +3826,12 @@ function stopPresenceHeartbeat() {
   }
   if (_presenceRef) {
     try { _presenceRef.onDisconnect().cancel(); } catch (_) { /* ignore */ }
-    try { _presenceRef.remove(); } catch (_) { /* ignore */ }
+    try { _presenceRef.remove(); } catch (_) { /* ignore */ }  // only OUR cell
     _presenceRef = null;
   }
+  // Deliberately do NOT remove the shared `controller` node here — another
+  // Commander may be relying on it; let it go stale instead.
+  _presenceControllerRef = null;
 }
 
 // Read the current controller once on connect. If someone else is heartbeating
