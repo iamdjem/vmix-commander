@@ -696,11 +696,7 @@ function setupEventListeners() {
       const key = 'profile_' + Date.now();
       appState.profiles[key] = {
         name,
-        rooms: [
-          { key: 'room1', name: 'Room 1', ip: '' },
-          { key: 'room2', name: 'Room 2', ip: '' },
-          { key: 'room3', name: 'Room 3', ip: '' }
-        ]
+        rooms: []  // rooms come from the linked tracker event, not seeds
       };
       appState.current = key;
       saveProfiles();
@@ -910,11 +906,7 @@ function setupEventListeners() {
       const key = 'profile_' + Date.now();
       appState.profiles[key] = {
         name,
-        rooms: [
-          { key: 'room1', name: 'Room 1', ip: '' },
-          { key: 'room2', name: 'Room 2', ip: '' },
-          { key: 'room3', name: 'Room 3', ip: '' }
-        ]
+        rooms: []  // rooms come from the linked tracker event, not seeds
       };
       appState.current = key;
       saveProfiles();

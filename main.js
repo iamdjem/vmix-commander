@@ -323,11 +323,13 @@ function loadProfiles() {
     profiles: {
       default: {
         name: 'Default Event',
-        rooms: [
-          { key: 'room1', name: 'Auditorium', ip: '' },
-          { key: 'room2', name: 'Hall A', ip: '' },
-          { key: 'room3', name: 'Hall B', ip: '' }
-        ]
+        // No seed rooms. Rooms are owned by the linked tracker event
+        // (config.vmixRooms / crew assignments). Seeding placeholders
+        // here meant a fresh Commander could push "Auditorium / Hall A /
+        // Hall B" into an event whose vmixRooms was still empty,
+        // permanently polluting it for every device. Empty-state UI
+        // handles "no rooms" until the event link reconciles.
+        rooms: []
       }
     }
   };
