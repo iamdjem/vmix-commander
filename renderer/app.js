@@ -2994,12 +2994,17 @@ async function reconcileCurrentOperatorRooms() {
 
 // Admin/Director equivalent of reconcileCrewRoomsIntoProfile: rebuild
 // profile.rooms to exactly the union of ALL crew members' rooms (the
-// tracker Setup page's config.crew[].rooms — the real source of truth).
-// Crucially, existing {key, ip} are preserved for rooms that survive by
-// case-insensitive name, so this never clears configured IPs. Prunes
-// rooms not assigned to any crew member (e.g. stale placeholders) so
-// admin sees the same set crew collectively sees, instead of whatever
-// drifted into config.vmixRooms. Returns the resulting room keys.
+// tracker Setup page's config.crew[].rooms — the real source of truth
+// for NAMES). Prunes rooms not assigned to any crew member so admin
+// sees the same set crew collectively sees.
+//
+// Identity (key) and IP are resolved from the SHARED remote
+// config.vmixRooms first, then the local profile, then generated. This
+// is what makes every admin converge: names come from the same crew
+// list, keys+IPs come from the same shared list, so two admins reconcile
+// to byte-identical room arrays instead of each minting private keys
+// (which would thrash via the vmixRooms subscription) or one admin's
+// blank IPs clobbering another's. Returns the resulting room keys.
 async function reconcileAllCrewRoomsIntoProfile() {
   const profile = getCurrentProfile();
   if (!profile) return [];
@@ -3018,18 +3023,39 @@ async function reconcileAllCrewRoomsIntoProfile() {
   });
   if (!orderedNames.length) return [];  // no crew rooms yet — don't wipe local
 
-  const byName = {};
+  // Shared identity source: the latest remote vmixRooms. Read once so all
+  // admins resolve the same {key, ip} for a given room name.
+  const byNameRemote = {};
+  try {
+    if (profile.trackerEventId && firebaseDb && trackerAuth && trackerAuth.currentUser) {
+      const snap = await firebaseDb
+        .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`)
+        .once('value');
+      const remote = snap.val();
+      if (Array.isArray(remote)) {
+        remote.forEach(r => {
+          if (r && r.name) byNameRemote[String(r.name).trim().toLowerCase()] = r;
+        });
+      }
+    }
+  } catch (_) { /* offline / denied — fall back to local-only resolution */ }
+
+  const byNameLocal = {};
   profile.rooms.forEach(r => {
-    if (r && r.name) byName[String(r.name).trim().toLowerCase()] = r;
+    if (r && r.name) byNameLocal[String(r.name).trim().toLowerCase()] = r;
   });
+
   const next = orderedNames.map(n => {
-    const ex = byName[n.toLowerCase()];
-    if (ex) return { key: ex.key, name: n, ip: ex.ip || '' };  // preserve key+ip
-    return {
-      key: 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
-      name: n,
-      ip: ''
-    };
+    const k = n.toLowerCase();
+    const rem = byNameRemote[k];
+    const loc = byNameLocal[k];
+    // key: prefer the shared remote key so all admins agree on identity.
+    const key = (rem && rem.key) || (loc && loc.key)
+      || ('room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6));
+    // ip: prefer whichever is actually set (remote wins ties) so we never
+    // blank out an IP another admin configured, nor lose a local-only one.
+    const ip = (rem && rem.ip) || (loc && loc.ip) || '';
+    return { key, name: n, ip };
   });
 
   const before = JSON.stringify(profile.rooms.map(r => ({ key: r.key, name: r.name, ip: r.ip || '' })));
