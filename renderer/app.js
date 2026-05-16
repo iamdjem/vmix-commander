@@ -3736,7 +3736,17 @@ async function pushVmixStatusToTracker() {
   });
 
   try {
-    await firebaseDb.ref(`${TRACKER_FB_ROOT}/vmixStatus/${profile.trackerEventId}`).set({
+    // Scope status under THIS Commander's id. Previously every Commander
+    // .set() the shared vmixStatus/<eventId> node, so N Commanders (one
+    // per venue) clobbered each other every ~2s and rooms flickered
+    // live↔unreachable on the tracker. Now each writes only its own
+    // sub-node; the tracker merges them (any reachable Commander = live).
+    // onDisconnect cleanup so a closed Commander's rooms drop out of the
+    // merge instead of lingering stale.
+    const ref = firebaseDb.ref(`${TRACKER_FB_ROOT}/vmixStatus/${profile.trackerEventId}/commanders/${COMMANDER_ID}`);
+    try { ref.onDisconnect().remove(); } catch (_) { /* best-effort */ }
+    await ref.set({
+      commanderId: COMMANDER_ID,
       updatedAt: Date.now(),
       operator: appState.identity ? buildOperatorPayload(appState.identity) : null,
       safetyLocked: !!controlsLocked,
