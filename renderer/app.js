@@ -1878,13 +1878,11 @@ function renderSettings() {
     ipInput.onchange = async () => {
       room.ip = ipInput.value.trim();
       await saveProfiles();
-      // Propagate the IP to Firebase so other Commanders (and the tracker)
-      // pick it up. Without this, an IP edit only ever lived in local
-      // profile storage and never reached config.vmixRooms — so a second
-      // Commander never saw it. The subscribeToTrackerVmixRooms echo guard
-      // handles the round-trip back to us.
-      if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
-        try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal — retries on next sync */ }
+      // Surgical per-room IP write so we never clobber other rooms' IPs
+      // that a mobile tracker user or another Commander just set. The
+      // subscribeToTrackerVmixRooms echo guard handles the round-trip.
+      if (appState.syncEnabled && typeof pushRoomIpToTrackerEvent === 'function') {
+        try { await pushRoomIpToTrackerEvent(room.key, room.ip); } catch (_) { /* non-fatal — retries on next sync */ }
       }
     };
 
@@ -3356,6 +3354,37 @@ async function pushRoomsToTrackerEvent() {
     console.error('Failed to push rooms to tracker event:', error);
     if (typeof pushErrorToTracker === 'function') {
       pushErrorToTracker({ message: 'pushRoomsToTrackerEvent: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRoomsToTrackerEvent' });
+    }
+  }
+}
+
+// Surgical single-room IP write. Unlike pushRoomsToTrackerEvent (which
+// does a whole-array .set()), this touches ONLY this room's ip, located
+// by key in the REMOTE array — so editing one room's IP can never
+// clobber other rooms' IPs that a mobile tracker user or another
+// Commander just set, and any row-order drift between devices is
+// irrelevant. Falls back to a full push only when the room isn't in the
+// remote list yet (nothing to clobber in that case).
+async function pushRoomIpToTrackerEvent(key, ip) {
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId || !firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+  try {
+    const base = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}`;
+    const snap = await firebaseDb.ref(`${base}/config/vmixRooms`).once('value');
+    const remote = snap.val();
+    if (Array.isArray(remote)) {
+      const idx = remote.findIndex(r => r && r.key === key);
+      if (idx >= 0) {
+        await firebaseDb.ref(`${base}/config/vmixRooms/${idx}/ip`).set(ip || '');
+        await firebaseDb.ref(`${base}/updatedAt`).set(Date.now());
+        return;
+      }
+    }
+    await pushRoomsToTrackerEvent();  // room not in remote list yet — rare
+  } catch (error) {
+    console.error('Failed to push room IP to tracker event:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'pushRoomIpToTrackerEvent: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRoomIpToTrackerEvent' });
     }
   }
 }
