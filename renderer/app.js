@@ -1772,9 +1772,13 @@ function renderProfiles() {
 }
 
 // Switch to a different profile
-function switchProfile(key) {
+async function switchProfile(key) {
   const previousEventId = (getCurrentProfile() || {}).trackerEventId || null;
-  cleanupRoomProxyClaimsForEvent(previousEventId);
+  // MUST await before reassigning appState.current: cleanup does a
+  // stale-read then conditional remove; if it resolves AFTER the new
+  // profile's pushVmixStatusToTracker re-claims, it deletes the fresh
+  // claim → multi-second routing blackout when switching profile.
+  try { await cleanupRoomProxyClaimsForEvent(previousEventId); } catch (_) { /* non-fatal */ }
   appState.current = key;
   saveProfiles();
   updateProfileBadge();
@@ -4298,9 +4302,12 @@ function unsubscribeFromTrackerCrew() {
   trackerCrewList = [];
 }
 
-// Look up a Commander profile room key by display name (case-sensitive exact
-// match). Used when resolving a tracker crew member's room list into the
-// internal room-key array stored on `identity.assignedRooms`.
+// Look up a Commander profile room key by display name. Match is
+// case-INSENSITIVE and whitespace-trimmed on both sides (same
+// normalization mergeMissingRoomsByName uses), so a casing/spacing
+// variant between crew config and profile still resolves. Used when
+// resolving a tracker crew member's room list into the internal
+// room-key array stored on `identity.assignedRooms`.
 function findRoomKeyByName(name) {
   if (!name) return null;
   const norm = String(name).trim().toLowerCase();
