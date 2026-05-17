@@ -3765,7 +3765,40 @@ async function pushVmixStatusToTracker() {
       pushErrorToTracker({ message: 'pushVmixStatusToTracker: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushVmixStatusToTracker' });
     }
   }
+
+  // Per-room proxy routing. The 3 room PCs are on SEPARATE networks, so a
+  // single shared vmixProxyUrl can't reach all rooms — only the rooms on
+  // whichever Commander's tunnel the tracker happened to pick. Here each
+  // Commander CLAIMS the rooms it can actually reach by writing its own
+  // tunnel URL to events/<id>/roomProxies/<roomKey>; the tracker then
+  // routes each room's command to that room's owning Commander's tunnel.
+  // Own-entry onDisconnect cleanup; never clobber a room another Commander
+  // owns.
+  try {
+    const proxyUrl = _currentTunnelUrl || '';
+    const rpBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxies`;
+    profile.rooms.forEach(r => {
+      const reachable = !!rooms[r.key] && rooms[r.key].ok;
+      const ref = firebaseDb.ref(`${rpBase}/${r.key}`);
+      if (reachable && proxyUrl) {
+        if (!_roomProxyClaims[r.key]) {
+          try { ref.onDisconnect().remove(); } catch (_) { /* best-effort */ }
+          _roomProxyClaims[r.key] = ref;
+        }
+        ref.set({ url: proxyUrl, commanderId: COMMANDER_ID, updatedAt: Date.now() }).catch(() => {});
+      } else if (_roomProxyClaims[r.key]) {
+        // We can no longer reach this room — drop OUR claim only.
+        try { _roomProxyClaims[r.key].onDisconnect().cancel(); } catch (_) {}
+        ref.once('value').then(s => {
+          const v = s.val();
+          if (v && v.commanderId === COMMANDER_ID) ref.remove().catch(() => {});
+        }).catch(() => {});
+        delete _roomProxyClaims[r.key];
+      }
+    });
+  } catch (_) { /* non-fatal — retries next status cycle */ }
 }
+let _roomProxyClaims = {};
 
 // ────────────────────────────────────────────────────────────────────────
 // Presence heartbeat + concurrent-operator detection
