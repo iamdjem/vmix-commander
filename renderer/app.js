@@ -15,6 +15,14 @@ const COMMANDER_ID = (() => {
   }
 })();
 
+const {
+  buildReachableRoomScope,
+  commanderScopesOverlap,
+  mergeMissingRoomsByName,
+  roomClaimKey,
+  claimBelongsToEvent
+} = window.CommanderRoutingHelpers;
+
 // State management
 let appState = {
   current: 'default',
@@ -557,6 +565,7 @@ async function switchToTrackerEvent(eventId) {
 
   const hadLiveSubs = appState.syncEnabled && !!firebaseDb && !!(trackerAuth && trackerAuth.currentUser);
   if (hadLiveSubs) {
+    await cleanupRoomProxyClaimsForEvent((getCurrentProfile() || {}).trackerEventId);
     stopPresenceHeartbeat();
     unsubscribeFromTrackerAudit();
     unsubscribeFromTrackerErrors();
@@ -802,7 +811,7 @@ function setupEventListeners() {
       await saveProfiles();
       await connectToFirebase();
     } else {
-      disconnectFromFirebase();
+      await disconnectFromFirebase();
       await saveProfiles();
     }
   });
@@ -811,6 +820,7 @@ function setupEventListeners() {
   document.getElementById('sync-event-select').addEventListener('change', async (e) => {
     const eventId = e.target.value;
     const profile = getCurrentProfile();
+    const previousEventId = profile.trackerEventId || null;
     profile.trackerEventId = eventId || null;
     // Rename the profile tab to match the bound event so the top tab and
     // the Settings dropdown can't drift apart.
@@ -819,6 +829,7 @@ function setupEventListeners() {
     updateProfileBadge();
     if (appState.syncEnabled) {
       // Rebuild event-scoped subscriptions / presence / initial pushes.
+      await cleanupRoomProxyClaimsForEvent(previousEventId);
       stopPresenceHeartbeat();
       unsubscribeFromTrackerAudit();
       unsubscribeFromTrackerErrors();
@@ -1762,6 +1773,8 @@ function renderProfiles() {
 
 // Switch to a different profile
 function switchProfile(key) {
+  const previousEventId = (getCurrentProfile() || {}).trackerEventId || null;
+  cleanupRoomProxyClaimsForEvent(previousEventId);
   appState.current = key;
   saveProfiles();
   updateProfileBadge();
@@ -2951,29 +2964,30 @@ async function reconcileCrewRoomsIntoProfile(crew) {
   if (!profile) return [];
   if (!Array.isArray(profile.rooms)) profile.rooms = [];
   const crewRooms = crew.rooms.filter(r => r && r.name && String(r.name).trim());
-  const keys = [];
-  let profileMutated = false;
-  crewRooms.forEach(cr => {
-    const normName = String(cr.name).trim();
-    const existing = profile.rooms.find(r =>
-      (r.name || '').trim().toLowerCase() === normName.toLowerCase()
-    );
-    if (existing) {
-      keys.push(existing.key);
-    } else {
-      const newKey = 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-      profile.rooms.push({ key: newKey, name: normName, ip: '' });
-      keys.push(newKey);
-      profileMutated = true;
-    }
-  });
+  const next = mergeMissingRoomsByName(profile.rooms, crewRooms, makeRoomKey);
+  const profileMutated = JSON.stringify(profile.rooms) !== JSON.stringify(next);
+  profile.rooms = next;
   if (profileMutated) {
     await saveProfiles();
-    if (appState.syncEnabled && typeof pushRoomsToTrackerEvent === 'function') {
-      try { await pushRoomsToTrackerEvent(); } catch (_) { /* non-fatal */ }
+    if (appState.syncEnabled && typeof upsertRoomsToTrackerEvent === 'function') {
+      try {
+        const roomsToEnsure = crewRooms.map((room) => {
+          const wantedName = String(room.name).trim().toLowerCase();
+          return profile.rooms.find((candidate) =>
+            String(candidate.name || '').trim().toLowerCase() === wantedName
+          );
+        }).filter(Boolean);
+        const remoteRooms = await upsertRoomsToTrackerEvent(roomsToEnsure);
+        if (Array.isArray(remoteRooms) && remoteRooms.length) {
+          profile.rooms = remoteRooms;
+          await saveProfiles();
+        }
+      } catch (_) { /* non-fatal */ }
     }
   }
-  return keys;
+  return crewRooms
+    .map((room) => findRoomKeyByName(room.name))
+    .filter(Boolean);
 }
 
 // Re-reconcile the current Operator's rooms against the live crew roster.
@@ -3144,7 +3158,7 @@ async function fullSignOut() {
     const chk = document.getElementById('chk-sync-enabled');
     if (chk) chk.checked = false;
     await saveProfiles();
-    disconnectFromFirebase();
+    await disconnectFromFirebase();
   }
   updateHeaderIdentityChip();
   showSignInGate();
@@ -3181,7 +3195,7 @@ async function switchTrackerRole(role) {
   }
   try {
     // Tear down subscriptions so they don't fire mid-reauth.
-    disconnectFromFirebase();
+    await disconnectFromFirebase();
     setStoredRole(desired);
     await connectToFirebase();
     showToast(desired === 'admin' ? 'Signed in as Admin' : 'Signed in as Crew');
@@ -3270,12 +3284,13 @@ async function connectToFirebase() {
   }
 }
 
-function disconnectFromFirebase() {
+async function disconnectFromFirebase() {
   if (trackerEventsRef) {
     trackerEventsRef.off();
     trackerEventsRef = null;
   }
   stopPresenceHeartbeat();
+  await cleanupAllRoomProxyClaims();
   unsubscribeFromTrackerAudit();
   unsubscribeFromTrackerErrors();
   unsubscribeFromTrackerCrew();
@@ -3361,6 +3376,48 @@ async function pushRoomsToTrackerEvent() {
     if (typeof pushErrorToTracker === 'function') {
       pushErrorToTracker({ message: 'pushRoomsToTrackerEvent: ' + (error && error.message || error), stack: error && error.stack || '', context: 'pushRoomsToTrackerEvent' });
     }
+  }
+}
+
+function makeRoomKey() {
+  return 'room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+// Additive room merge used by Operator reconciliation. This deliberately
+// avoids whole-array replacement so one crew member signing in cannot erase
+// another Commander's rooms/IPs from the shared event config.
+async function upsertRoomsToTrackerEvent(roomsToEnsure) {
+  const profile = getCurrentProfile();
+  if (!profile.trackerEventId || !firebaseDb || !trackerAuth || !trackerAuth.currentUser) return null;
+  const clean = (roomsToEnsure || [])
+    .filter((room) => room && room.key && room.name)
+    .map((room) => ({ key: room.key, name: String(room.name).trim(), ip: room.ip || '' }));
+  if (!clean.length) return null;
+
+  try {
+    const ref = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`);
+    const tx = await ref.transaction((current) => {
+      const base = Array.isArray(current)
+        ? current.map((room) => ({ key: room && room.key || '', name: room && room.name || '', ip: room && room.ip || '' }))
+        : [];
+      clean.forEach((room) => {
+        const wanted = room.name.trim().toLowerCase();
+        const exists = base.some((candidate) => String(candidate.name || '').trim().toLowerCase() === wanted);
+        if (!exists) base.push(room);
+      });
+      return base;
+    });
+    await firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/updatedAt`).set(Date.now());
+    const remote = tx && tx.snapshot ? tx.snapshot.val() : null;
+    return Array.isArray(remote)
+      ? remote.map((room) => ({ key: room && room.key || '', name: room && room.name || '', ip: room && room.ip || '' })).filter((room) => room.key)
+      : null;
+  } catch (error) {
+    console.error('Failed to upsert rooms to tracker event:', error);
+    if (typeof pushErrorToTracker === 'function') {
+      pushErrorToTracker({ message: 'upsertRoomsToTrackerEvent: ' + (error && error.message || error), stack: error && error.stack || '', context: 'upsertRoomsToTrackerEvent' });
+    }
+    return null;
   }
 }
 
@@ -3766,39 +3823,79 @@ async function pushVmixStatusToTracker() {
     }
   }
 
-  // Per-room proxy routing. The 3 room PCs are on SEPARATE networks, so a
-  // single shared vmixProxyUrl can't reach all rooms — only the rooms on
-  // whichever Commander's tunnel the tracker happened to pick. Here each
-  // Commander CLAIMS the rooms it can actually reach by writing its own
-  // tunnel URL to events/<id>/roomProxies/<roomKey>; the tracker then
-  // routes each room's command to that room's owning Commander's tunnel.
-  // Own-entry onDisconnect cleanup; never clobber a room another Commander
-  // owns.
+  // Per-room proxy routing. Multiple Commanders can legitimately serve one
+  // event from separate private networks, so each Commander publishes its own
+  // event+room-scoped claim. Tracker prefers the freshest claim per room, then
+  // falls back to the legacy single winner mirror for older clients.
   try {
     const proxyUrl = _currentTunnelUrl || '';
-    const rpBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxies`;
+    const claimsBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxyClaims`;
+    const legacyBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxies`;
     profile.rooms.forEach(r => {
       const reachable = !!rooms[r.key] && rooms[r.key].ok;
-      const ref = firebaseDb.ref(`${rpBase}/${r.key}`);
+      const key = roomClaimKey(profile.trackerEventId, r.key, COMMANDER_ID);
+      const claimRef = firebaseDb.ref(`${claimsBase}/${r.key}/${COMMANDER_ID}`);
+      const legacyRef = firebaseDb.ref(`${legacyBase}/${r.key}`);
       if (reachable && proxyUrl) {
-        if (!_roomProxyClaims[r.key]) {
-          try { ref.onDisconnect().remove(); } catch (_) { /* best-effort */ }
-          _roomProxyClaims[r.key] = ref;
+        if (!_roomProxyClaims[key]) {
+          try { claimRef.onDisconnect().remove(); } catch (_) { /* best-effort */ }
+          _roomProxyClaims[key] = {
+            eventId: profile.trackerEventId,
+            roomKey: r.key,
+            claimRef,
+            legacyRef
+          };
         }
-        ref.set({ url: proxyUrl, commanderId: COMMANDER_ID, updatedAt: Date.now() }).catch(() => {});
-      } else if (_roomProxyClaims[r.key]) {
-        // We can no longer reach this room — drop OUR claim only.
-        try { _roomProxyClaims[r.key].onDisconnect().cancel(); } catch (_) {}
-        ref.once('value').then(s => {
-          const v = s.val();
-          if (v && v.commanderId === COMMANDER_ID) ref.remove().catch(() => {});
+        const payload = { url: proxyUrl, commanderId: COMMANDER_ID, updatedAt: Date.now() };
+        claimRef.set(payload).then(() => {
+          console.log(`[room-proxy] claim ${profile.trackerEventId}/${r.key} -> ${proxyUrl}`);
         }).catch(() => {});
-        delete _roomProxyClaims[r.key];
+        legacyRef.set(payload).catch(() => {});
+      } else if (_roomProxyClaims[key]) {
+        removeRoomProxyClaim(key);
       }
     });
   } catch (_) { /* non-fatal — retries next status cycle */ }
 }
 let _roomProxyClaims = {};
+
+function removeRoomProxyClaim(key) {
+  const claim = _roomProxyClaims[key];
+  if (!claim) return Promise.resolve();
+  try { claim.claimRef.onDisconnect().cancel(); } catch (_) {}
+  delete _roomProxyClaims[key];
+  console.log(`[room-proxy] remove ${claim.eventId}/${claim.roomKey}`);
+  return Promise.all([
+    claim.claimRef.remove().catch(() => {}),
+    claim.legacyRef.once('value').then((snap) => {
+      const current = snap.val();
+      if (current && current.commanderId === COMMANDER_ID) {
+        return claim.legacyRef.remove().catch(() => {});
+      }
+      return null;
+    }).catch(() => {})
+  ]);
+}
+
+async function cleanupRoomProxyClaimsForEvent(eventId) {
+  if (!eventId) return;
+  const keys = Object.keys(_roomProxyClaims).filter((key) => claimBelongsToEvent(key, eventId));
+  await Promise.all(keys.map((key) => removeRoomProxyClaim(key)));
+}
+
+function cleanupAllRoomProxyClaims() {
+  return Promise.all(Object.keys(_roomProxyClaims).map((key) => removeRoomProxyClaim(key)));
+}
+
+function currentReachableRoomKeys() {
+  const profile = getCurrentProfile();
+  if (!profile || !Array.isArray(profile.rooms)) return [];
+  const roomStatus = {};
+  profile.rooms.forEach((room) => {
+    roomStatus[room.key] = appState.vmixStatus[scopedKey(room.key)] || {};
+  });
+  return buildReachableRoomScope(roomStatus);
+}
 
 // ────────────────────────────────────────────────────────────────────────
 // Presence heartbeat + concurrent-operator detection
@@ -3833,7 +3930,8 @@ function startPresenceHeartbeat() {
       commanderId: COMMANDER_ID,
       operator: identityOrPlaceholder(),
       lastHeartbeat: Date.now(),
-      safetyLocked: !!controlsLocked
+      safetyLocked: !!controlsLocked,
+      reachableRooms: currentReachableRoomKeys()
     };
     if (_presenceRef) {
       _presenceRef.set(payload).catch((error) => {
@@ -3867,24 +3965,46 @@ function stopPresenceHeartbeat() {
   _presenceControllerRef = null;
 }
 
-// Read the current controller once on connect. If someone else is heartbeating
-// within the last 10s and they're not us, prompt the user.
+// Read live peers once on connect. Multiple Commanders are valid for one event;
+// only warn when another live Commander overlaps the same reachable room scope.
 async function checkConcurrentOperator() {
   const profile = getCurrentProfile();
   if (!profile.trackerEventId) return;
   if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
 
   try {
-    const snap = await firebaseDb
-      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/controller`)
+    const now = Date.now();
+    const myScope = currentReachableRoomKeys();
+    const presenceSnap = await firebaseDb
+      .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/presence`)
       .once('value');
-    const current = snap.val();
-    if (!current) return;
+    const presence = presenceSnap.val() || {};
+    const peers = Object.values(presence).filter((entry) =>
+      entry &&
+      entry.commanderId &&
+      entry.commanderId !== COMMANDER_ID &&
+      entry.lastHeartbeat &&
+      (now - entry.lastHeartbeat) < 10000
+    );
+    const overlappingPeer = peers.find((entry) =>
+      commanderScopesOverlap(myScope, entry.reachableRooms || entry.operator && entry.operator.assignedRooms || [])
+    );
+    if (overlappingPeer) {
+      showConcurrentOperatorModal(overlappingPeer);
+      return;
+    }
 
-    const recent = current.lastHeartbeat && (Date.now() - current.lastHeartbeat) < 10000;
-    const different = current.commanderId && current.commanderId !== COMMANDER_ID;
-    if (recent && different) {
-      showConcurrentOperatorModal(current);
+    // Backward compatibility for old Commanders that only publish the legacy
+    // shared controller node. If the modern presence map has no live peers at
+    // all, keep the old safeguard.
+    if (!peers.length) {
+      const snap = await firebaseDb
+        .ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/controller`)
+        .once('value');
+      const current = snap.val();
+      const recent = current && current.lastHeartbeat && (now - current.lastHeartbeat) < 10000;
+      const different = current && current.commanderId && current.commanderId !== COMMANDER_ID;
+      if (recent && different) showConcurrentOperatorModal(current);
     }
   } catch (error) {
     console.error('Concurrent-operator check failed:', error);

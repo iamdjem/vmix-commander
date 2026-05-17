@@ -89,13 +89,13 @@ identifier used elsewhere in this schema (`vmixStatus.rooms`, `roomLocks`,
 **Notes:** Tracker falls back to the top-level `vmix_proxy_url` when this
 per-event value is absent.
 
-### `events/<eventId>/controller`
+### `events/<eventId>/controller` (legacy compatibility mirror)
 
 | | |
 | --- | --- |
 | **Path** | `events/<eventId>/controller` |
-| **Writer** | Commander (heartbeat every ~5s, `onDisconnect` clears) |
-| **Reader** | Commander (on startup, to detect another active controller), Tracker (to display who's in control) |
+| **Writer** | Commander (heartbeat every ~5s) |
+| **Reader** | Older Commander / Tracker clients; current clients prefer `presence/` |
 
 **Shape:**
 
@@ -115,9 +115,29 @@ type Controller = {
 };
 ```
 
-**Stale detection:** if `Date.now() - lastHeartbeat > 10_000`, treat the
-controller as gone. Tracker should display "Commander offline" and Commander
-should allow claiming control on startup.
+**Notes:** Retained for backwards compatibility. Current multi-Commander
+clients publish their authoritative liveness under `presence/<commanderId>`
+and only use this node as a compatibility mirror for older clients.
+
+### `events/<eventId>/presence/<commanderId>`
+
+| | |
+| --- | --- |
+| **Path** | `events/<eventId>/presence/<commanderId>` |
+| **Writer** | Commander (heartbeat every ~5s, own cell removed on disconnect) |
+| **Reader** | Commander (peer detection), Tracker (online banner / presence) |
+
+**Shape:**
+
+```ts
+type Presence = Controller & {
+  reachableRooms?: string[]; // room keys currently reachable from this Commander
+};
+```
+
+**Stale detection:** if `Date.now() - lastHeartbeat > 10_000`, treat that
+Commander as offline. Multiple live presence cells are valid; Commander only
+warns when another live Commander overlaps the same reachable room scope.
 
 **Crew alignment:** Both apps' identity modals offer a "Sign in as crew member"
 dropdown populated from `events/<id>/config/crew` (Tracker-owned, written from
@@ -230,15 +250,43 @@ if the global lock is on, per-room values are irrelevant.
 A mirror of this object is embedded in `vmixStatus/<eventId>/roomLocks` for
 convenience; treat `events/<eventId>/roomLocks` as the source of truth.
 
----
-
-### `vmixStatus/<eventId>` (top-level, outside `events/`)
+### `events/<eventId>/roomProxyClaims/<roomKey>/<commanderId>`
 
 | | |
 | --- | --- |
-| **Path** | `vmixStatus/<eventId>` |
+| **Path** | `events/<eventId>/roomProxyClaims/<roomKey>/<commanderId>` |
+| **Writer** | Commander (when that Commander can reach the room) |
+| **Reader** | Tracker |
+
+**Shape:**
+
+```ts
+type RoomProxyClaim = {
+  url: string;         // this Commander's HTTPS Cloudflare tunnel
+  commanderId: string;
+  updatedAt: number;   // epoch ms
+};
+```
+
+**Routing semantics:** Tracker chooses the freshest non-stale claim for the
+room first. If no fresh claim exists, it falls back to the legacy
+`roomProxies/<roomKey>` mirror, then `config.vmixProxyUrl`, then top-level
+`vmix_proxy_url`.
+
+### `events/<eventId>/roomProxies/<roomKey>` (legacy fallback)
+
+Single-slot mirror retained for rollout compatibility with older Tracker
+clients. New multi-Commander clients should read `roomProxyClaims` first.
+
+---
+
+### `vmixStatus/<eventId>/commanders/<commanderId>` (top-level, outside `events/`)
+
+| | |
+| --- | --- |
+| **Path** | `vmixStatus/<eventId>/commanders/<commanderId>` |
 | **Writer** | Commander (debounced ~400ms after state changes; immediate on lock / identity / profile switch) |
-| **Reader** | Tracker (source of truth for Recording page) |
+| **Reader** | Tracker (merged source of truth for Recording page) |
 
 **Shape:**
 
@@ -254,6 +302,7 @@ type RoomStatus = {
 };
 
 type VmixStatus = {
+  commanderId: string;
   updatedAt: number;
   operator: { name: string; role: string } | null;
   safetyLocked: boolean;
@@ -262,7 +311,12 @@ type VmixStatus = {
 };
 ```
 
-**Staleness:** Tracker shows a "Commander offline" banner when
+**Merge semantics:** Tracker merges every Commander child. A room is live when
+any fresh Commander reports it reachable; stale sources cannot keep a room
+green. During rollout, Tracker also folds in the old flat
+`vmixStatus/<eventId>` shape when present.
+
+**Staleness:** Tracker treats one Commander status child as stale when
 `Date.now() - updatedAt > 15_000`.
 
 **Why it lives outside `events/`:** so Commander's own `events/<id>` snapshot
@@ -320,6 +374,9 @@ The tombstone is permanent — do not recycle event IDs.
   `operator` payload in both `controller` and `vmixStatus`. Populated when a
   user signs in as a specific crew member from `config.crew`. Tracker's
   Recording page gains Director-only filter tabs per crew member.
+- **2026-05-17** — Added per-Commander `presence`, per-Commander nested
+  `vmixStatus`, and per-room `roomProxyClaims` so multiple Commanders on
+  separate private networks can serve one event safely.
 
 ## Known gaps
 
