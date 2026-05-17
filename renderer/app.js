@@ -19,6 +19,7 @@ const {
   buildReachableRoomScope,
   commanderScopesOverlap,
   mergeMissingRoomsByName,
+  buildPublishableRoomStatus,
   roomClaimKey,
   claimBelongsToEvent
 } = window.CommanderRoutingHelpers;
@@ -3780,18 +3781,37 @@ function identityOrPlaceholder() {
     : { name: 'unknown', role: 'Observer' };
 }
 
+let _ownedStatusRoomsByEvent = {};
+
+function ownedStatusKey(eventId, roomKey) {
+  return `${eventId}::${roomKey}`;
+}
+
+function ownedStatusRoomKeys(eventId) {
+  return Object.keys(_ownedStatusRoomsByEvent)
+    .filter((key) => claimBelongsToEvent(key, eventId))
+    .map((key) => key.split('::')[1])
+    .filter(Boolean);
+}
+
+function rememberOwnedStatusRooms(eventId, roomKeys) {
+  (roomKeys || []).forEach((roomKey) => {
+    _ownedStatusRoomsByEvent[ownedStatusKey(eventId, roomKey)] = true;
+  });
+}
+
 async function pushVmixStatusToTracker() {
   if (!appState.syncEnabled) return;
   const profile = getCurrentProfile();
   if (!profile.trackerEventId) return;
   if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
 
-  const rooms = {};
+  const allRoomStatuses = {};
   profile.rooms.forEach(r => {
     const sk = scopedKey(r.key);
     const s = appState.vmixStatus[sk] || {};
     const h = appState.vmixHealth[sk] || {};
-    rooms[r.key] = {
+    allRoomStatuses[r.key] = {
       ok: !!s.ok,
       recording: !!s.recording,
       streaming: !!s.streaming,
@@ -3801,6 +3821,13 @@ async function pushVmixStatusToTracker() {
       recordingStartTime: recordingStartTimes[sk] || null
     };
   });
+  const publishable = buildPublishableRoomStatus({
+    rooms: profile.rooms,
+    statusByRoom: allRoomStatuses,
+    ownedRoomKeys: ownedStatusRoomKeys(profile.trackerEventId)
+  });
+  rememberOwnedStatusRooms(profile.trackerEventId, publishable.ownedRoomKeys);
+  const rooms = publishable.rooms;
 
   try {
     // Scope status under THIS Commander's id. Previously every Commander
@@ -3836,7 +3863,7 @@ async function pushVmixStatusToTracker() {
     const claimsBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxyClaims`;
     const legacyBase = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/roomProxies`;
     profile.rooms.forEach(r => {
-      const reachable = !!rooms[r.key] && rooms[r.key].ok;
+      const reachable = !!allRoomStatuses[r.key] && allRoomStatuses[r.key].ok;
       const key = roomClaimKey(profile.trackerEventId, r.key, COMMANDER_ID);
       const claimRef = firebaseDb.ref(`${claimsBase}/${r.key}/${COMMANDER_ID}`);
       const legacyRef = firebaseDb.ref(`${legacyBase}/${r.key}`);

@@ -25,6 +25,31 @@
     return next;
   }
 
+  function buildPublishableRoomStatus({
+    rooms = [],
+    statusByRoom = {},
+    ownedRoomKeys = [],
+  } = {}) {
+    const owned = new Set(ownedRoomKeys || []);
+    const nextOwned = new Set(owned);
+    const publishable = {};
+
+    (rooms || []).forEach((room) => {
+      const key = room && room.key ? String(room.key) : '';
+      if (!key) return;
+      const status = statusByRoom[key] || {};
+      if (status.ok) nextOwned.add(key);
+      if (status.ok || owned.has(key)) {
+        publishable[key] = status;
+      }
+    });
+
+    return {
+      rooms: publishable,
+      ownedRoomKeys: Array.from(nextOwned),
+    };
+  }
+
   function roomClaimKey(eventId, roomKey, commanderId) {
     return `${eventId}::${roomKey}::${commanderId}`;
   }
@@ -37,6 +62,7 @@
     buildReachableRoomScope,
     commanderScopesOverlap,
     mergeMissingRoomsByName,
+    buildPublishableRoomStatus,
     roomClaimKey,
     claimBelongsToEvent,
   };
