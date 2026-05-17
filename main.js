@@ -650,6 +650,17 @@ ipcMain.handle('identity:save', (event, identity) => {
   return saveIdentity(identity);
 });
 
+ipcMain.handle('device:getInfo', () => {
+  let username = '';
+  try { username = os.userInfo().username || ''; } catch (_) {}
+  return {
+    hostname: os.hostname() || '',
+    platform: os.platform() || '',
+    arch: os.arch() || '',
+    username
+  };
+});
+
 // Proxy status handler
 ipcMain.handle('proxy:getStatus', () => {
   return proxyState;

@@ -2987,15 +2987,46 @@ function signInPickCrew(crewId, el) {
   if (doneBtn) doneBtn.disabled = false;
 }
 
-function signInDefaultAdminName() {
+function sanitizeDeviceLabelPart(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._ -]/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 40);
+}
+
+function browserFallbackDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const haystack = (ua + ' ' + platform).toLowerCase();
+  if (/windows/.test(haystack) || /win32|win64/.test(haystack)) return 'Windows';
+  if (/mac/.test(haystack)) return 'Mac';
+  if (/linux/.test(haystack)) return 'Linux';
+  return 'Commander';
+}
+
+async function getAdminDeviceLabel() {
+  try {
+    if (window.device && typeof window.device.getInfo === 'function') {
+      const info = await window.device.getInfo();
+      const host = sanitizeDeviceLabelPart(info && info.hostname);
+      if (host) return host;
+    }
+  } catch (_) { /* fall through */ }
+  return browserFallbackDeviceLabel();
+}
+
+async function signInDefaultAdminName() {
   const nameInput = document.getElementById('signin-admin-name');
   const typed = (nameInput?.value || '').trim();
-  return typed || appState.identity?.name || 'Admin';
+  const deviceLabel = await getAdminDeviceLabel();
+  return typed || (deviceLabel ? `Admin · ${deviceLabel}` : '') || 'Admin';
 }
 
 async function signInFinishAdmin() {
-  const name = signInDefaultAdminName();
-  await saveIdentity({ name, role: 'Admin' });
+  const name = await signInDefaultAdminName();
+  const deviceLabel = await getAdminDeviceLabel();
+  await saveIdentity({ name, role: 'Admin', deviceLabel: deviceLabel || null, deviceId: COMMANDER_ID });
   // Admin sees ALL rooms — adopt the full crew-room union from the tracker
   // (the source of truth). Without this, admin only ever saw whatever was
   // in config.vmixRooms, which drifts; crew sign-in already reconciles.

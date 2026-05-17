@@ -56,6 +56,11 @@ contextBridge.exposeInMainWorld('identity', {
   save: (identity) => ipcRenderer.invoke('identity:save', identity)
 });
 
+contextBridge.exposeInMainWorld('device', {
+  // Best-effort local machine info for automatic admin log labels
+  getInfo: () => ipcRenderer.invoke('device:getInfo')
+});
+
 contextBridge.exposeInMainWorld('proxy', {
   // Get proxy status: { running, port, localIp }
   getStatus: () => ipcRenderer.invoke('proxy:getStatus'),
