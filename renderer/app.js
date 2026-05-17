@@ -1120,20 +1120,50 @@ async function allRoomsAction(rooms, action) {
   runAllRoomsAction(withIp, action);
 }
 
+const VMIX_START_SEQUENCE = ['StartRecording', 'StartMultiCorder', 'StartStreaming'];
+const VMIX_STOP_SEQUENCE = ['StopStreaming', 'StopMultiCorder', 'StopRecording'];
+const VMIX_START_STEP_DELAY_MS = 1200;
+const VMIX_STOP_STEP_DELAY_MS = 700;
+
+function vmixDelay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function vmixFnsForAction(action) {
+  return action === 'start' ? VMIX_START_SEQUENCE : VMIX_STOP_SEQUENCE;
+}
+
+function vmixDelayForAction(action) {
+  return action === 'start' ? VMIX_START_STEP_DELAY_MS : VMIX_STOP_STEP_DELAY_MS;
+}
+
+async function runVmixRoomSequence(room, action) {
+  const fns = vmixFnsForAction(action);
+  const delay = vmixDelayForAction(action);
+  const results = [];
+  for (let i = 0; i < fns.length; i++) {
+    const fn = fns[i];
+    try {
+      results.push(await callVmixForRoom(room, fn));
+    } catch (err) {
+      results.push({ ok: false, error: err.message || String(err) });
+    }
+    if (i < fns.length - 1) await vmixDelay(delay);
+  }
+  return results;
+}
+
 async function runAllRoomsAction(withIp, action) {
-  showToast(`${action === 'start' ? 'Starting' : 'Stopping'} ${withIp.length} rooms…`);
+  showToast(`${action === 'start' ? 'Starting' : 'Stopping'} ${withIp.length} rooms in sequence…`);
 
-  const fns = action === 'start'
-    ? ['StartRecording', 'StartStreaming', 'StartMultiCorder']
-    : ['StopRecording', 'StopStreaming', 'StopMultiCorder'];
-
-  const results = await Promise.all(
-    withIp.flatMap(room => fns.map(fn =>
-      callVmixForRoom(room, fn)
-        .then(res => ({ ...res, room: room.name }))
-        .catch(err => ({ ok: false, error: err.message, room: room.name }))
-    ))
+  const nested = await Promise.all(
+    withIp.map(room =>
+      runVmixRoomSequence(room, action)
+        .then(results => results.map(res => ({ ...res, room: room.name })))
+        .catch(err => vmixFnsForAction(action).map(() => ({ ok: false, error: err.message, room: room.name })))
+    )
   );
+  const results = nested.flat();
 
   const okCount = results.filter(r => r.ok).length;
   const totalCount = results.length;
@@ -1461,17 +1491,11 @@ async function roomAction(roomKey, action) {
     return;
   }
 
-  showToast((action === 'start' ? 'Starting' : 'Stopping') + ' ' + room.name + '…');
-
-  const functions = action === 'start'
-    ? ['StartRecording', 'StartStreaming', 'StartMultiCorder']
-    : ['StopRecording', 'StopStreaming', 'StopMultiCorder'];
+  showToast((action === 'start' ? 'Starting' : 'Stopping') + ' ' + room.name + ' in sequence…');
 
   let results;
   try {
-    results = await Promise.all(
-      functions.map(fn => callVmixForRoom(room, fn).catch(err => ({ ok: false, error: err.message })))
-    );
+    results = await runVmixRoomSequence(room, action);
   } catch (err) {
     console.error('Room action failed:', err);
     showToast('✗ Room action failed');
@@ -4911,15 +4935,17 @@ async function executeShowItem(itemId) {
         await appendAuditLog(room.name, 'STOP MULTI', result.ok ? 'ok' : 'fail');
         break;
       case 'Start All':
-        await callVmixForRoom(room, 'StartRecording');
-        await callVmixForRoom(room, 'StartStreaming');
-        result = await callVmixForRoom(room, 'StartMultiCorder');
+        {
+          const results = await runVmixRoomSequence(room, 'start');
+          result = { ok: results.every(r => r.ok) };
+        }
         await appendAuditLog(room.name, 'START ALL', result.ok ? 'ok' : 'fail');
         break;
       case 'Stop All':
-        await callVmixForRoom(room, 'StopRecording');
-        await callVmixForRoom(room, 'StopStreaming');
-        result = await callVmixForRoom(room, 'StopMultiCorder');
+        {
+          const results = await runVmixRoomSequence(room, 'stop');
+          result = { ok: results.every(r => r.ok) };
+        }
         await appendAuditLog(room.name, 'STOP ALL', result.ok ? 'ok' : 'fail');
         break;
     }
