@@ -8,6 +8,8 @@ const {
   buildPublishableRoomStatus,
   roomClaimKey,
   claimBelongsToEvent,
+  selectRoomProxyRoute,
+  mergeCommanderStatus,
 } = require('../renderer/commander-routing-helpers');
 
 test('buildReachableRoomScope keeps only reachable room keys', () => {
@@ -71,4 +73,56 @@ test('roomClaimKey scopes claims by event, room, and commander', () => {
 test('claimBelongsToEvent identifies claims for cleanup', () => {
   assert.equal(claimBelongsToEvent('ev1::roomA::cmd1', 'ev1'), true);
   assert.equal(claimBelongsToEvent('ev2::roomA::cmd1', 'ev1'), false);
+});
+
+test('selectRoomProxyRoute chooses the freshest per-room claim', () => {
+  const now = 1_000_000;
+  const route = selectRoomProxyRoute({
+    roomKey: 'roomA',
+    now,
+    claimMap: {
+      old: { url: 'https://old.example', commanderId: 'old', updatedAt: now - 10_000 },
+      fresh: { url: 'https://fresh.example', commanderId: 'fresh', updatedAt: now - 1_000 },
+    },
+    eventProxyUrl: 'https://event.example',
+  });
+
+  assert.equal(route.url, 'https://fresh.example');
+  assert.equal(route.commanderId, 'fresh');
+  assert.equal(route.source, 'claim');
+});
+
+test('selectRoomProxyRoute ignores stale claims before falling back', () => {
+  const now = 1_000_000;
+  const route = selectRoomProxyRoute({
+    roomKey: 'roomA',
+    now,
+    claimMap: {
+      stale: { url: 'https://stale.example', commanderId: 'stale', updatedAt: now - 60_000 },
+    },
+    eventProxyUrl: 'https://event.example',
+  });
+
+  assert.equal(route.url, 'https://event.example');
+  assert.equal(route.source, 'event');
+});
+
+test('mergeCommanderStatus prefers reachable fresh room reports over unreachable reports', () => {
+  const now = 1_000_000;
+  const merged = mergeCommanderStatus({
+    commanders: {
+      one: {
+        updatedAt: now - 1000,
+        rooms: { roomA: { ok: false, tier: 'unreachable' } },
+      },
+      two: {
+        updatedAt: now - 2000,
+        rooms: { roomA: { ok: true, tier: 'healthy', streaming: true, latency: 12 } },
+      },
+    },
+  }, { now, staleMs: 15_000 });
+
+  assert.equal(merged.rooms.roomA.ok, true);
+  assert.equal(merged.rooms.roomA.streaming, true);
+  assert.equal(merged.rooms.roomA.latency, 12);
 });

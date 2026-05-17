@@ -21,7 +21,9 @@ const {
   mergeMissingRoomsByName,
   buildPublishableRoomStatus,
   roomClaimKey,
-  claimBelongsToEvent
+  claimBelongsToEvent,
+  selectRoomProxyRoute,
+  mergeCommanderStatus
 } = window.CommanderRoutingHelpers;
 
 // State management
@@ -148,6 +150,8 @@ function stopRecordingTimers() {
 }
 let firebaseDb = null;
 let firebaseRef = null;
+
+const COMMANDER_VMIX_STALE_MS = 15_000;
 
 // Initialize app
 // ─── Proxy Status Bar ────────────────────────────────────────────────────────
@@ -573,6 +577,7 @@ async function switchToTrackerEvent(eventId) {
     unsubscribeFromTrackerCrew();
     unsubscribeFromTrackerSafetyLock();
     unsubscribeFromTrackerVmixRooms();
+    unsubscribeFromTrackerRouting();
   }
 
   appState.current = targetKey;
@@ -593,6 +598,7 @@ async function switchToTrackerEvent(eventId) {
         subscribeToTrackerCrew();
         subscribeToTrackerSafetyLock();
         subscribeToTrackerVmixRooms();
+        subscribeToTrackerRouting();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
         pushSafetyLockToTracker();
@@ -850,6 +856,7 @@ function setupEventListeners() {
         subscribeToTrackerCrew();
         subscribeToTrackerSafetyLock();
         subscribeToTrackerVmixRooms();
+        subscribeToTrackerRouting();
         pushRunOfShowToTracker();
         pushRoomLocksToTracker();
         pushSafetyLockToTracker();
@@ -1122,7 +1129,7 @@ async function runAllRoomsAction(withIp, action) {
 
   const results = await Promise.all(
     withIp.flatMap(room => fns.map(fn =>
-      window.vmix.call(room.ip, fn)
+      callVmixForRoom(room, fn)
         .then(res => ({ ...res, room: room.name }))
         .catch(err => ({ ok: false, error: err.message, room: room.name }))
     ))
@@ -1174,7 +1181,7 @@ function createRoomCard(room) {
   card.draggable = true;
   card.dataset.roomKey = room.key;
 
-  const status = appState.vmixStatus[scopedKey(room.key)] || { ok: false, recording: false, streaming: false, multicorder: false };
+  const status = displayStatusForRoom(room.key);
   const connected = room.ip && status.ok;
   const error = room.ip && !status.ok;
 
@@ -1229,7 +1236,7 @@ function createRoomCard(room) {
   name.title = room.name;
 
   // Health info
-  const health = appState.vmixHealth[scopedKey(room.key)] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const health = displayHealthForRoom(room.key);
   const healthEl = document.createElement('div');
   healthEl.className = `room-health ${health.tier}`;
   healthEl.id = 'room-health-' + room.key;
@@ -1416,12 +1423,9 @@ async function callVmix(roomKey, functionName) {
     return { ok: false, error: 'no ip' };
   }
 
-  let result;
-  try {
-    result = await window.vmix.call(room.ip, functionName);
-  } catch (err) {
-    console.error('vMix call failed:', err);
-    result = { ok: false, error: err.message || 'Network error' };
+  const result = await callVmixForRoom(room, functionName);
+  if (!result.ok) {
+    console.error('vMix call failed:', result.error || result);
   }
 
   // Log to audit
@@ -1466,7 +1470,7 @@ async function roomAction(roomKey, action) {
   let results;
   try {
     results = await Promise.all(
-      functions.map(fn => window.vmix.call(room.ip, fn).catch(err => ({ ok: false, error: err.message })))
+      functions.map(fn => callVmixForRoom(room, fn).catch(err => ({ ok: false, error: err.message })))
     );
   } catch (err) {
     console.error('Room action failed:', err);
@@ -1522,7 +1526,11 @@ async function refreshStatus(roomKey) {
       failures,
       tier
     };
-    if (tier === 'unreachable' && prev.tier !== 'unreachable') {
+    // Remote rooms are expected to fail direct LAN probes from this laptop.
+    // If another fresh Commander owns the room, do not scare the operator
+    // with a local "unreachable" toast; the display layer will show the
+    // routed/merged status instead.
+    if (tier === 'unreachable' && prev.tier !== 'unreachable' && !trackerRoomReachable(roomKey)) {
       showToast(`${room.name} is unreachable`);
     }
   }
@@ -1551,8 +1559,8 @@ function updateRoomCard(roomKey) {
   const card = document.getElementById('room-card-' + roomKey);
   if (!card) return;
 
-  const status = appState.vmixStatus[scopedKey(roomKey)] || { ok: false, recording: false, streaming: false, multicorder: false };
-  const health = appState.vmixHealth[scopedKey(roomKey)] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const status = displayStatusForRoom(roomKey);
+  const health = displayHealthForRoom(roomKey);
   const error = room.ip && !status.ok;
 
   const healthEl = document.getElementById('room-health-' + roomKey);
@@ -1790,6 +1798,10 @@ async function switchProfile(key) {
   else if (appState.currentPage === 'show') renderShowTimeline();
   else if (appState.currentPage === 'log') renderAuditLog();
   else if (appState.currentPage === 'settings') renderSettings();
+
+  if (appState.syncEnabled && firebaseDb && trackerAuth && trackerAuth.currentUser) {
+    subscribeToTrackerRouting();
+  }
 
   showToast('Switched to ' + appState.profiles[key].name);
   if (typeof pushVmixStatusToTracker === 'function') pushVmixStatusToTracker();
@@ -3273,6 +3285,7 @@ async function connectToFirebase() {
     subscribeToTrackerCrew();
     subscribeToTrackerSafetyLock();
     subscribeToTrackerVmixRooms();
+    subscribeToTrackerRouting();
     pushRunOfShowToTracker();
     pushRoomLocksToTracker();
     pushSafetyLockToTracker();
@@ -3301,6 +3314,7 @@ async function disconnectFromFirebase() {
   unsubscribeFromTrackerCrew();
   unsubscribeFromTrackerSafetyLock();
   unsubscribeFromTrackerVmixRooms();
+  unsubscribeFromTrackerRouting();
   setReadOnlyMode(false);
   // Sign out so the next connect re-evaluates the persisted role choice
   // cleanly. Keeps role-switch flows from getting stuck on stale auth.
@@ -3593,6 +3607,220 @@ function unsubscribeFromTrackerVmixRooms() {
     try { _trackerVmixRoomsRef.off(); } catch (_) { /* ignore */ }
     _trackerVmixRoomsRef = null;
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Routed multi-Commander status/control reader.
+//
+// Local Commander instances still probe and publish only the rooms they can
+// actually reach on their own LAN. For the desktop UI, however, an operator
+// sitting at one room should see the same merged truth as the mobile Tracker:
+// a room is healthy if any fresh Commander that owns that room reports it
+// healthy, and controls for remote rooms route through that owning
+// Commander's Cloudflare tunnel.
+// ────────────────────────────────────────────────────────────────────────
+let _trackerVmixStatusRef = null;
+let _trackerRoomProxyClaimsRef = null;
+let _trackerRoomProxiesRef = null;
+let _trackerPerEventProxyRef = null;
+let _trackerGlobalProxyRef = null;
+let _trackerMergedVmixStatus = null;
+let _trackerRoomProxyClaims = {};
+let _trackerRoomProxies = {};
+let _trackerPerEventProxyUrl = '';
+let _trackerGlobalProxyUrl = '';
+
+function trackerMergedStatusFresh() {
+  return !!(_trackerMergedVmixStatus && _trackerMergedVmixStatus.updatedAt &&
+    (Date.now() - _trackerMergedVmixStatus.updatedAt) < COMMANDER_VMIX_STALE_MS);
+}
+
+function trackerRoomStatus(roomKey) {
+  if (!trackerMergedStatusFresh()) return null;
+  return _trackerMergedVmixStatus.rooms && _trackerMergedVmixStatus.rooms[roomKey] || null;
+}
+
+function trackerRoomReachable(roomKey) {
+  const status = trackerRoomStatus(roomKey);
+  return !!(status && status.ok);
+}
+
+function displayStatusForRoom(roomKey) {
+  const local = appState.vmixStatus[scopedKey(roomKey)] || {
+    ok: false,
+    recording: false,
+    streaming: false,
+    multicorder: false
+  };
+  // Prefer local success so this Commander keeps showing its own measured
+  // latency. If local cannot reach the room, fall through to the merged
+  // routed status from the owning Commander.
+  if (local.ok) return local;
+  return trackerRoomStatus(roomKey) || local;
+}
+
+function displayHealthForRoom(roomKey) {
+  const localStatus = appState.vmixStatus[scopedKey(roomKey)] || {};
+  const localHealth = appState.vmixHealth[scopedKey(roomKey)] || {
+    latency: 0,
+    lastSeen: null,
+    failures: 0,
+    tier: 'offline'
+  };
+  if (localStatus.ok) return localHealth;
+
+  const remote = trackerRoomStatus(roomKey);
+  if (remote) {
+    return {
+      latency: remote.latency || 0,
+      lastSeen: _trackerMergedVmixStatus && _trackerMergedVmixStatus.updatedAt || Date.now(),
+      failures: remote.ok ? 0 : 3,
+      tier: remote.tier || (remote.ok ? 'healthy' : 'unreachable')
+    };
+  }
+  return localHealth;
+}
+
+function commanderRouteForRoom(roomKey) {
+  return selectRoomProxyRoute({
+    roomKey,
+    claimMap: roomKey && _trackerRoomProxyClaims ? (_trackerRoomProxyClaims[roomKey] || {}) : {},
+    legacyRoute: roomKey && _trackerRoomProxies ? _trackerRoomProxies[roomKey] : null,
+    eventProxyUrl: _trackerPerEventProxyUrl || '',
+    globalProxyUrl: _trackerGlobalProxyUrl || ''
+  });
+}
+
+function shouldUseRemoteRoute(roomKey, route) {
+  if (!route || !route.url) return false;
+  // If the room is locally reachable, direct IPC is faster and keeps the
+  // action independent from the public tunnel. If the route explicitly points
+  // at this same Commander, direct IPC is equivalent and avoids a loop.
+  if (appState.vmixStatus[scopedKey(roomKey)] && appState.vmixStatus[scopedKey(roomKey)].ok) return false;
+  if (route.commanderId && route.commanderId === COMMANDER_ID) return false;
+  return true;
+}
+
+async function callVmixForRoom(room, functionName) {
+  if (!room || !room.ip) return { ok: false, error: 'no ip' };
+
+  const route = commanderRouteForRoom(room.key);
+  if (shouldUseRemoteRoute(room.key, route)) {
+    console.log('[commander-route] command', room.key, functionName, 'via', route.source, route.url, route.commanderId || '');
+    try {
+      const response = await fetch(`${route.url}/vmix-proxy?ip=${encodeURIComponent(room.ip)}&fn=${encodeURIComponent(functionName)}`);
+      if (response.ok) return { ok: true, routed: true, route };
+      let detail = '';
+      try { detail = (await response.text()).trim().slice(0, 160); } catch (_) {}
+      return {
+        ok: false,
+        routed: true,
+        route,
+        error: `proxy HTTP ${response.status}${detail ? ' — ' + detail : ''}`
+      };
+    } catch (error) {
+      return { ok: false, routed: true, route, error: error.message || 'route failed' };
+    }
+  }
+
+  try {
+    return await window.vmix.call(room.ip, functionName);
+  } catch (error) {
+    return { ok: false, error: error.message || 'Network error' };
+  }
+}
+
+function applyTrackerMergedStatusToDisplay() {
+  const profile = getCurrentProfile();
+  if (!profile || !Array.isArray(profile.rooms)) return;
+
+  profile.rooms.forEach((room) => {
+    const remote = trackerRoomStatus(room.key);
+    const sk = scopedKey(room.key);
+    if (remote && !appState.vmixStatus[sk]?.ok) {
+      if (remote.recording && remote.recordingStartTime) {
+        recordingStartTimes[sk] = remote.recordingStartTime;
+      } else if (remote.recording && !recordingStartTimes[sk]) {
+        recordingStartTimes[sk] = Date.now();
+      } else if (!remote.recording && recordingStartTimes[sk]) {
+        delete recordingStartTimes[sk];
+      }
+    }
+    updateRoomCard(room.key);
+  });
+  persistRecordingTimes();
+}
+
+function subscribeToTrackerRouting() {
+  unsubscribeFromTrackerRouting();
+  const profile = getCurrentProfile();
+  if (!profile || !profile.trackerEventId) return;
+  if (!firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
+
+  const eventId = profile.trackerEventId;
+
+  _trackerVmixStatusRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/vmixStatus/${eventId}`);
+  _trackerVmixStatusRef.on('value', (snap) => {
+    _trackerMergedVmixStatus = mergeCommanderStatus(snap.val(), {
+      now: Date.now(),
+      staleMs: COMMANDER_VMIX_STALE_MS
+    });
+    applyTrackerMergedStatusToDisplay();
+  }, (error) => {
+    console.error('Tracker routed vmixStatus subscription error:', error);
+  });
+
+  _trackerRoomProxyClaimsRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${eventId}/roomProxyClaims`);
+  _trackerRoomProxyClaimsRef.on('value', (snap) => {
+    _trackerRoomProxyClaims = snap.val() || {};
+  }, (error) => {
+    console.error('Tracker roomProxyClaims subscription error:', error);
+  });
+
+  _trackerRoomProxiesRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${eventId}/roomProxies`);
+  _trackerRoomProxiesRef.on('value', (snap) => {
+    _trackerRoomProxies = snap.val() || {};
+  }, (error) => {
+    console.error('Tracker roomProxies subscription error:', error);
+  });
+
+  _trackerPerEventProxyRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${eventId}/config/vmixProxyUrl`);
+  _trackerPerEventProxyRef.on('value', (snap) => {
+    _trackerPerEventProxyUrl = snap.val() || '';
+  }, (error) => {
+    console.error('Tracker per-event proxy subscription error:', error);
+  });
+
+  _trackerGlobalProxyRef = firebaseDb.ref(`${TRACKER_FB_ROOT}/vmix_proxy_url`);
+  _trackerGlobalProxyRef.on('value', (snap) => {
+    _trackerGlobalProxyUrl = snap.val() || '';
+  }, (error) => {
+    console.error('Tracker global proxy subscription error:', error);
+  });
+}
+
+function unsubscribeFromTrackerRouting() {
+  [
+    _trackerVmixStatusRef,
+    _trackerRoomProxyClaimsRef,
+    _trackerRoomProxiesRef,
+    _trackerPerEventProxyRef,
+    _trackerGlobalProxyRef
+  ].forEach((ref) => {
+    if (ref) {
+      try { ref.off(); } catch (_) { /* ignore */ }
+    }
+  });
+  _trackerVmixStatusRef = null;
+  _trackerRoomProxyClaimsRef = null;
+  _trackerRoomProxiesRef = null;
+  _trackerPerEventProxyRef = null;
+  _trackerGlobalProxyRef = null;
+  _trackerMergedVmixStatus = null;
+  _trackerRoomProxyClaims = {};
+  _trackerRoomProxies = {};
+  _trackerPerEventProxyUrl = '';
+  _trackerGlobalProxyUrl = '';
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -4659,39 +4887,39 @@ async function executeShowItem(itemId) {
 
     switch (item.action) {
       case 'Start Recording':
-        result = await window.vmix.call(room.ip, 'StartRecording');
+        result = await callVmixForRoom(room, 'StartRecording');
         await appendAuditLog(room.name, 'START REC', result.ok ? 'ok' : 'fail');
         break;
       case 'Stop Recording':
-        result = await window.vmix.call(room.ip, 'StopRecording');
+        result = await callVmixForRoom(room, 'StopRecording');
         await appendAuditLog(room.name, 'STOP REC', result.ok ? 'ok' : 'fail');
         break;
       case 'Start Streaming':
-        result = await window.vmix.call(room.ip, 'StartStreaming');
+        result = await callVmixForRoom(room, 'StartStreaming');
         await appendAuditLog(room.name, 'START STREAM', result.ok ? 'ok' : 'fail');
         break;
       case 'Stop Streaming':
-        result = await window.vmix.call(room.ip, 'StopStreaming');
+        result = await callVmixForRoom(room, 'StopStreaming');
         await appendAuditLog(room.name, 'STOP STREAM', result.ok ? 'ok' : 'fail');
         break;
       case 'Start MultiCorder':
-        result = await window.vmix.call(room.ip, 'StartMultiCorder');
+        result = await callVmixForRoom(room, 'StartMultiCorder');
         await appendAuditLog(room.name, 'START MULTI', result.ok ? 'ok' : 'fail');
         break;
       case 'Stop MultiCorder':
-        result = await window.vmix.call(room.ip, 'StopMultiCorder');
+        result = await callVmixForRoom(room, 'StopMultiCorder');
         await appendAuditLog(room.name, 'STOP MULTI', result.ok ? 'ok' : 'fail');
         break;
       case 'Start All':
-        await window.vmix.call(room.ip, 'StartRecording');
-        await window.vmix.call(room.ip, 'StartStreaming');
-        result = await window.vmix.call(room.ip, 'StartMultiCorder');
+        await callVmixForRoom(room, 'StartRecording');
+        await callVmixForRoom(room, 'StartStreaming');
+        result = await callVmixForRoom(room, 'StartMultiCorder');
         await appendAuditLog(room.name, 'START ALL', result.ok ? 'ok' : 'fail');
         break;
       case 'Stop All':
-        await window.vmix.call(room.ip, 'StopRecording');
-        await window.vmix.call(room.ip, 'StopStreaming');
-        result = await window.vmix.call(room.ip, 'StopMultiCorder');
+        await callVmixForRoom(room, 'StopRecording');
+        await callVmixForRoom(room, 'StopStreaming');
+        result = await callVmixForRoom(room, 'StopMultiCorder');
         await appendAuditLog(room.name, 'STOP ALL', result.ok ? 'ok' : 'fail');
         break;
     }
