@@ -2847,9 +2847,7 @@ async function signInPickEvent(eventId) {
     }
   }
   if (_signinChosenRole === 'admin') {
-    const nm = document.getElementById('signin-admin-name');
-    if (nm && !nm.value) nm.value = appState.identity?.name || '';
-    signInShowStep('adminIdentity');
+    await signInFinishAdmin();
   } else {
     renderSignInCrewList();
     signInShowStep('crewIdentity');
@@ -2922,7 +2920,7 @@ async function signInVerifyPassword() {
     return;
   }
   if (_signinChosenRole === 'admin') {
-    signInShowStep('adminIdentity');
+    await signInFinishAdmin();
   } else {
     renderSignInCrewList();
     signInShowStep('crewIdentity');
@@ -2974,10 +2972,14 @@ function signInPickCrew(crewId, el) {
   if (doneBtn) doneBtn.disabled = false;
 }
 
-async function signInFinishAdmin() {
+function signInDefaultAdminName() {
   const nameInput = document.getElementById('signin-admin-name');
-  const name = (nameInput?.value || '').trim();
-  if (!name) { nameInput?.focus(); return; }
+  const typed = (nameInput?.value || '').trim();
+  return typed || appState.identity?.name || 'Admin';
+}
+
+async function signInFinishAdmin() {
+  const name = signInDefaultAdminName();
   await saveIdentity({ name, role: 'Director' });
   // Admin sees ALL rooms — adopt the full crew-room union from the tracker
   // (the source of truth). Without this, admin only ever saw whatever was
