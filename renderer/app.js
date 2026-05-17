@@ -43,6 +43,21 @@ let appState = {
   logFilters: { room: '', user: '', action: '' }
 };
 
+function isIdentityAdminRole(roleOrIdentity) {
+  const role = typeof roleOrIdentity === 'string'
+    ? roleOrIdentity
+    : roleOrIdentity && roleOrIdentity.role;
+  return role === 'Admin' || role === 'Director';
+}
+
+function displayIdentityRole(role) {
+  return isIdentityAdminRole(role) ? 'Admin' : (role || 'Admin');
+}
+
+function currentIdentityIsAdmin() {
+  return isIdentityAdminRole(appState.identity);
+}
+
 // Read-only mode flag — flipped when the user chose "Go read-only" on the
 // concurrent-operator prompt. When true, no vMix-action call should fire and
 // the sync toggle is disabled.
@@ -979,8 +994,8 @@ function renderRooms() {
         ? crew.rooms.map(r => r && r.name).filter(Boolean)
         : [];
       const roomsHint = crewRoomNames.length
-        ? `Your assigned rooms aren't configured in vMix: ${crewRoomNames.map(n => `'${n}'`).join(', ')}. Ask a Director to add them, or change identity.`
-        : `You have no rooms assigned yet. Ask a Director to update the crew list, or change identity.`;
+        ? `Your assigned rooms aren't configured in vMix: ${crewRoomNames.map(n => `'${n}'`).join(', ')}. Ask an Admin to add them, or change identity.`
+        : `You have no rooms assigned yet. Ask an Admin to update the crew list, or change identity.`;
       container.innerHTML =
         '<div class="empty-state">' +
         '<strong>No rooms assigned</strong><br>' +
@@ -995,11 +1010,11 @@ function renderRooms() {
     return;
   }
 
-  // Show an All Rooms master card only for Directors when there are 2+
+  // Show an All Rooms master card only for Admins when there are 2+
   // rooms. Operators are scoped to their own room; Observers are
   // read-only and have no use for the master controls.
-  const isDirector = appState.identity && appState.identity.role === 'Director';
-  if (roomsToShow.length >= 2 && isDirector) {
+  const isAdminIdentity = currentIdentityIsAdmin();
+  if (roomsToShow.length >= 2 && isAdminIdentity) {
     container.appendChild(createAllRoomsCard(roomsToShow));
   }
 
@@ -2150,7 +2165,7 @@ function renderTrackerCrewDropdown() {
 
   const staticOptions = [
     '<option value="__custom__">— Custom identity —</option>',
-    '<option value="__director__">Director — All rooms</option>'
+    '<option value="__director__">Admin — All rooms</option>'
   ];
 
   const crewOptions = (trackerCrewList || [])
@@ -2213,11 +2228,11 @@ function wireIdentityModal({ onSave }) {
       return;
     }
     if (value === '__director__') {
-      // Director shortcut — only fill name if blank.
+      // Admin shortcut — only fill name if blank.
       if (!nameInput.value.trim() && appState.identity && appState.identity.name) {
         nameInput.value = appState.identity.name;
       }
-      roleSelect.value = 'Director';
+      roleSelect.value = 'Admin';
       nameInput.disabled = false;
       roleSelect.disabled = false;
       if (crewHint) crewHint.style.display = 'none';
@@ -2281,7 +2296,7 @@ function wireIdentityModal({ onSave }) {
         identity.assignedRooms = [key];
       }
     }
-    // Director / Custom-non-operator: no assignedRooms / crewId.
+    // Admin / Custom-non-operator: no assignedRooms / crewId.
 
     await saveIdentity(identity);
     closeModalOverlay(document.getElementById('identity-modal'));
@@ -2324,7 +2339,7 @@ function showChangeIdentityModal() {
   // Pre-fill current identity before wiring so wireIdentityModal's initial
   // pass sees the right values.
   nameInput.value = appState.identity.name || '';
-  roleSelect.value = appState.identity.role || 'Director';
+  roleSelect.value = displayIdentityRole(appState.identity.role);
 
   // Pre-select the crew dropdown if the active identity references one.
   // Otherwise default to "Custom identity" so the name/role inputs stay free.
@@ -2394,7 +2409,7 @@ function updateIdentityDisplay() {
   if (!display || !appState.identity) return;
 
   let html = `<div style="margin-bottom: 8px;"><strong>Name:</strong> ${appState.identity.name}</div>`;
-  html += `<div style="margin-bottom: 8px;"><strong>Role:</strong> ${appState.identity.role}</div>`;
+  html += `<div style="margin-bottom: 8px;"><strong>Role:</strong> ${displayIdentityRole(appState.identity.role)}</div>`;
 
   if (appState.identity.role === 'Operator') {
     const profile = getCurrentProfile();
@@ -2424,9 +2439,9 @@ function applyRoleRestrictions() {
 
   const role = appState.identity.role;
 
-  // Hide Log tab for non-Directors
+  // Hide Log tab for non-Admins
   const logTab = document.getElementById('nav-tab-log');
-  if (role === 'Director') {
+  if (isIdentityAdminRole(role)) {
     logTab.style.display = 'flex';
   } else {
     logTab.style.display = 'none';
@@ -2436,14 +2451,14 @@ function applyRoleRestrictions() {
     }
   }
 
-  // Hide import/export buttons for non-Directors
-  const hideForNonDirector = [
+  // Hide import/export buttons for non-Admins
+  const hideForNonAdmin = [
     'btn-export-profiles',
     'btn-import-profiles'
   ];
-  hideForNonDirector.forEach(id => {
+  hideForNonAdmin.forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.style.display = role === 'Director' ? 'inline-block' : 'none';
+    if (el) el.style.display = isIdentityAdminRole(role) ? 'inline-block' : 'none';
   });
 
   // Observers: hide all control buttons
@@ -2734,10 +2749,10 @@ async function signInTrackerAs(role) {
 // Sign-in gate — unified sign-in + identity flow. Replaces the separate
 // "sign in as admin/crew" buttons + "change identity" modal with a single
 // launch-time prompt that maps the auth role (ADMIN/CREW) to the right
-// identity shape (Director name vs. crew roster pick) in one interaction.
+// identity shape (Admin name vs. crew roster pick) in one interaction.
 // ────────────────────────────────────────────────────────────────────────
 let _signinChosenRole = null;   // 'admin' | 'user'
-let _signinChosenCrew = null;   // crew.id (or null for Observer/Director)
+let _signinChosenCrew = null;   // crew.id (or null for Observer/Admin)
 
 function showSignInGate() {
   const gate = document.getElementById('signin-gate');
@@ -2980,7 +2995,7 @@ function signInDefaultAdminName() {
 
 async function signInFinishAdmin() {
   const name = signInDefaultAdminName();
-  await saveIdentity({ name, role: 'Director' });
+  await saveIdentity({ name, role: 'Admin' });
   // Admin sees ALL rooms — adopt the full crew-room union from the tracker
   // (the source of truth). Without this, admin only ever saw whatever was
   // in config.vmixRooms, which drifts; crew sign-in already reconciles.
@@ -4559,7 +4574,7 @@ function subscribeToTrackerCrew() {
     // crew-room union whenever the roster arrives or changes. Without this,
     // an admin who signed in before the crew snapshot landed would never
     // reconcile (reconcileCurrentOperatorRooms is Operator-only).
-    if (appState.identity && appState.identity.role === 'Director'
+    if (currentIdentityIsAdmin()
         && typeof reconcileAllCrewRoomsIntoProfile === 'function') {
       reconcileAllCrewRoomsIntoProfile().catch(function () { /* non-fatal */ });
     }
@@ -4847,7 +4862,7 @@ function renderShowTimeline() {
       row.classList.add('show-item-active');
     }
 
-    const isDirector = appState.identity && appState.identity.role === 'Director';
+    const isAdminIdentity = currentIdentityIsAdmin();
     const isObserver = appState.identity && appState.identity.role === 'Observer';
 
     row.innerHTML = `
@@ -4866,7 +4881,7 @@ function renderShowTimeline() {
           <button class="btn btn-success btn-sm btn-show-go" data-id="${item.id}">Go</button>
           <button class="btn btn-ghost btn-sm btn-show-skip" data-id="${item.id}">Skip</button>
         ` : ''}
-        ${isDirector ? `
+        ${isAdminIdentity ? `
           <button class="btn btn-ghost btn-sm btn-show-edit" data-id="${item.id}">✏</button>
         ` : ''}
       </div>
@@ -5112,7 +5127,7 @@ function startShowAutoTrigger() {
 
   // Check every 30 seconds
   showAutoTriggerInterval = setInterval(() => {
-    if (!appState.identity || appState.identity.role !== 'Director') return;
+    if (!currentIdentityIsAdmin()) return;
 
     const runOfShow = getRunOfShow();
     const now = new Date();
