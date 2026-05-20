@@ -1542,11 +1542,15 @@ async function refreshStatus(roomKey) {
     status = { ok: false, error: err.message || 'Network error' };
   }
   const sk = scopedKey(roomKey);
-  appState.vmixStatus[sk] = status;
 
-  // Update health tracking
+  // Update health tracking. Do not let a single missed vMix HTTP poll flip a
+  // live room to ERR in Firebase/Tracker. Venue Wi-Fi and Cloudflare tunnels
+  // can miss one request; wait for repeated failures before publishing the
+  // room as unreachable, while keeping the last known good state visible.
+  const previousStatus = appState.vmixStatus[sk] || {};
   const prev = appState.vmixHealth[sk] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
   if (status.ok) {
+    appState.vmixStatus[sk] = Object.assign({}, status, { _stale: false, _lastGoodAt: Date.now() });
     appState.vmixHealth[sk] = {
       latency: status.latency || 0,
       lastSeen: Date.now(),
@@ -1558,13 +1562,29 @@ async function refreshStatus(roomKey) {
     }
   } else {
     const failures = prev.failures + 1;
-    const tier = failures >= 3 ? 'unreachable' : failures >= 1 ? 'degraded' : 'healthy';
+    const tier = failures >= 3 ? 'unreachable' : 'degraded';
     appState.vmixHealth[sk] = {
       latency: prev.latency,
       lastSeen: prev.lastSeen,
       failures,
       tier
     };
+    if (previousStatus.ok && failures < 3) {
+      appState.vmixStatus[sk] = Object.assign({}, previousStatus, {
+        ok: true,
+        _stale: true,
+        _lastError: status.error || 'status refresh failed',
+        _lastErrorAt: Date.now()
+      });
+    } else {
+      appState.vmixStatus[sk] = Object.assign({}, previousStatus, status, {
+        ok: false,
+        recording: false,
+        streaming: false,
+        multicorder: false,
+        _stale: false
+      });
+    }
     // Remote rooms are expected to fail direct LAN probes from this laptop.
     // If another fresh Commander owns the room, do not scare the operator
     // with a local "unreachable" toast; the display layer will show the
@@ -1575,12 +1595,13 @@ async function refreshStatus(roomKey) {
   }
 
   // Track recording start time (persisted to localStorage)
-  if (status.ok && status.recording) {
+  const effectiveStatus = appState.vmixStatus[sk] || status;
+  if (effectiveStatus.ok && effectiveStatus.recording) {
     if (!recordingStartTimes[sk]) {
       recordingStartTimes[sk] = Date.now();
       persistRecordingTimes();
     }
-  } else if (recordingStartTimes[sk]) {
+  } else if (!effectiveStatus._stale && recordingStartTimes[sk]) {
     delete recordingStartTimes[sk];
     persistRecordingTimes();
   }
