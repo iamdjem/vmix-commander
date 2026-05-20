@@ -26,6 +26,10 @@ const {
   mergeCommanderStatus
 } = window.CommanderRoutingHelpers;
 
+const COMMANDER_ROUTE_STICKY_MS = 10_000;
+const COMMANDER_STATUS_INTERVAL_MS = 3_000;
+const COMMANDER_DISCOVERY_PROBE_MS = 30_000;
+
 // State management
 let appState = {
   current: 'default',
@@ -135,12 +139,27 @@ function scopedKey(roomKey) {
 
 // Format ms duration as H:MM:SS or MM:SS
 function formatDuration(ms) {
-  const totalSec = Math.floor(ms / 1000);
+  const totalSec = Math.floor(Math.max(0, ms || 0) / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
   const pad = (n) => String(n).padStart(2, '0');
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function formatStatusAge(ms) {
+  if (!Number.isFinite(ms)) return '';
+  if (ms < 1000) return '<1s';
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return `${min}m${rem ? ` ${rem}s` : ''}`;
+}
+
+function statusAgeMs(status, fallbackAt) {
+  const at = status && (status.updatedAt || status._lastGoodAt || status._lastErrorAt) || fallbackAt || null;
+  return at ? Math.max(0, Date.now() - at) : null;
 }
 
 // Update all recording timer displays every second
@@ -1528,12 +1547,46 @@ async function roomAction(roomKey, action) {
   setTimeout(() => refreshStatus(roomKey), 1200);
 }
 
+const statusRefreshInFlight = {};
+const statusRefreshSeq = {};
+const lastDiscoveryProbeAt = {};
+
+function shouldSkipLocalStatusProbe(roomKey) {
+  const sk = scopedKey(roomKey);
+  const local = appState.vmixStatus[sk] || {};
+  if (local.ok) return false;
+  const remote = trackerRoomStatus(roomKey);
+  const route = commanderRouteForRoom(roomKey);
+  if (!(remote && remote.ok && route && route.commanderId && route.commanderId !== COMMANDER_ID)) return false;
+  const now = Date.now();
+  const lastProbe = lastDiscoveryProbeAt[sk] || 0;
+  if ((now - lastProbe) < COMMANDER_DISCOVERY_PROBE_MS) return true;
+  lastDiscoveryProbeAt[sk] = now;
+  return false;
+}
+
 // Refresh status for one room
 async function refreshStatus(roomKey) {
   const profile = getCurrentProfile();
   const room = profile.rooms.find(r => r.key === roomKey);
   if (!room) return;
+  if (statusRefreshInFlight[roomKey]) return statusRefreshInFlight[roomKey];
+  if (shouldSkipLocalStatusProbe(roomKey)) {
+    updateRoomCard(roomKey);
+    return;
+  }
 
+  const seq = (statusRefreshSeq[roomKey] || 0) + 1;
+  statusRefreshSeq[roomKey] = seq;
+  statusRefreshInFlight[roomKey] = (async () => {
+    await refreshStatusInner(roomKey, room, seq);
+  })().finally(() => {
+    if (statusRefreshSeq[roomKey] === seq) delete statusRefreshInFlight[roomKey];
+  });
+  return statusRefreshInFlight[roomKey];
+}
+
+async function refreshStatusInner(roomKey, room, seq) {
   let status;
   try {
     status = await window.vmix.status(room.ip);
@@ -1541,6 +1594,7 @@ async function refreshStatus(roomKey) {
     console.error('vMix status failed:', err);
     status = { ok: false, error: err.message || 'Network error' };
   }
+  if (statusRefreshSeq[roomKey] !== seq) return;
   const sk = scopedKey(roomKey);
 
   // Update health tracking. Do not let a single missed vMix HTTP poll flip a
@@ -1549,11 +1603,12 @@ async function refreshStatus(roomKey) {
   // room as unreachable, while keeping the last known good state visible.
   const previousStatus = appState.vmixStatus[sk] || {};
   const prev = appState.vmixHealth[sk] || { latency: 0, lastSeen: null, failures: 0, tier: 'offline' };
+  const now = Date.now();
   if (status.ok) {
-    appState.vmixStatus[sk] = Object.assign({}, status, { _stale: false, _lastGoodAt: Date.now() });
+    appState.vmixStatus[sk] = Object.assign({}, status, { updatedAt: now, _stale: false, _lastGoodAt: now });
     appState.vmixHealth[sk] = {
       latency: status.latency || 0,
-      lastSeen: Date.now(),
+      lastSeen: now,
       failures: 0,
       tier: (status.latency || 0) > 1000 ? 'degraded' : 'healthy'
     };
@@ -1569,12 +1624,13 @@ async function refreshStatus(roomKey) {
       failures,
       tier
     };
-    if (previousStatus.ok && failures < 3) {
+    const lastGoodAt = previousStatus._lastGoodAt || previousStatus.updatedAt || prev.lastSeen || 0;
+    if (previousStatus.ok && lastGoodAt && failures < 3) {
       appState.vmixStatus[sk] = Object.assign({}, previousStatus, {
         ok: true,
         _stale: true,
         _lastError: status.error || 'status refresh failed',
-        _lastErrorAt: Date.now()
+        _lastErrorAt: now
       });
     } else {
       appState.vmixStatus[sk] = Object.assign({}, previousStatus, status, {
@@ -1582,6 +1638,7 @@ async function refreshStatus(roomKey) {
         recording: false,
         streaming: false,
         multicorder: false,
+        updatedAt: now,
         _stale: false
       });
     }
@@ -1631,10 +1688,14 @@ function updateRoomCard(roomKey) {
       healthLabel.textContent = 'No IP';
     } else {
       healthEl.className = 'room-health ' + health.tier;
+      const age = statusAgeMs(status, health.lastSeen);
+      const ageText = age == null ? '' : ` · ${formatStatusAge(age)}`;
       if (health.tier === 'healthy') {
-        healthLabel.textContent = `Ping ${health.latency}ms`;
+        healthLabel.textContent = `Ping ${health.latency}ms${ageText}`;
       } else if (health.tier === 'degraded') {
-        healthLabel.textContent = health.failures > 0 ? 'Reconnecting…' : `Ping ${health.latency}ms`;
+        healthLabel.textContent = status._stale
+          ? `Stale ${formatStatusAge(age == null ? 0 : age)}`
+          : (health.failures > 0 ? 'Reconnecting…' : `Ping ${health.latency}ms${ageText}`);
       } else if (health.tier === 'unreachable') {
         const ago = health.lastSeen ? Math.round((Date.now() - health.lastSeen) / 1000) : 0;
         healthLabel.textContent = ago > 0 ? `Offline ${ago}s` : 'Offline';
@@ -1709,6 +1770,7 @@ async function refreshAllStatus() {
 function startStatusRefresh() {
   stopStatusRefresh();
   startRecordingTimers();
+  refreshAllStatus();
   // Poll vMix on every tick regardless of which Commander tab is active.
   // The status push to Firebase is what keeps the tracker's "Commander
   // online" indicator fresh — gating polling on the Rooms tab caused the
@@ -1716,7 +1778,7 @@ function startStatusRefresh() {
   // switched to Settings, Log, or Show.
   statusRefreshInterval = setInterval(() => {
     refreshAllStatus();
-  }, 8000);
+  }, COMMANDER_STATUS_INTERVAL_MS);
 }
 
 // Stop auto-refresh
@@ -3722,6 +3784,7 @@ let _trackerRoomProxyClaims = {};
 let _trackerRoomProxies = {};
 let _trackerPerEventProxyUrl = '';
 let _trackerGlobalProxyUrl = '';
+let _trackerStickyRoomRoutes = {};
 
 function trackerMergedStatusFresh() {
   return !!(_trackerMergedVmixStatus && _trackerMergedVmixStatus.updatedAt &&
@@ -3766,22 +3829,39 @@ function displayHealthForRoom(roomKey) {
   if (remote) {
     return {
       latency: remote.latency || 0,
-      lastSeen: _trackerMergedVmixStatus && _trackerMergedVmixStatus.updatedAt || Date.now(),
+      lastSeen: remote.updatedAt || (_trackerMergedVmixStatus && _trackerMergedVmixStatus.updatedAt) || Date.now(),
       failures: remote.ok ? 0 : 3,
-      tier: remote.tier || (remote.ok ? 'healthy' : 'unreachable')
+      tier: remote._stale ? 'degraded' : (remote.tier || (remote.ok ? 'healthy' : 'unreachable'))
     };
   }
   return localHealth;
 }
 
 function commanderRouteForRoom(roomKey) {
-  return selectRoomProxyRoute({
+  const previous = roomKey ? _trackerStickyRoomRoutes[roomKey] : null;
+  const route = selectRoomProxyRoute({
     roomKey,
     claimMap: roomKey && _trackerRoomProxyClaims ? (_trackerRoomProxyClaims[roomKey] || {}) : {},
     legacyRoute: roomKey && _trackerRoomProxies ? _trackerRoomProxies[roomKey] : null,
     eventProxyUrl: _trackerPerEventProxyUrl || '',
-    globalProxyUrl: _trackerGlobalProxyUrl || ''
+    globalProxyUrl: _trackerGlobalProxyUrl || '',
+    stickyRoute: previous,
+    stickyMs: COMMANDER_ROUTE_STICKY_MS
   });
+  if (roomKey) {
+    if (route.url) {
+      const same = previous && previous.url === route.url && previous.commanderId === route.commanderId && previous.source === route.source;
+      _trackerStickyRoomRoutes[roomKey] = {
+        url: route.url,
+        commanderId: route.commanderId || '',
+        source: route.source || '',
+        selectedAt: same ? previous.selectedAt : Date.now()
+      };
+    } else {
+      delete _trackerStickyRoomRoutes[roomKey];
+    }
+  }
+  return route;
 }
 
 function shouldUseRemoteRoute(roomKey, route) {
@@ -3914,6 +3994,7 @@ function unsubscribeFromTrackerRouting() {
   _trackerRoomProxies = {};
   _trackerPerEventProxyUrl = '';
   _trackerGlobalProxyUrl = '';
+  _trackerStickyRoomRoutes = {};
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -4139,7 +4220,8 @@ async function pushVmixStatusToTracker() {
       multicorder: !!s.multicorder,
       latency: h.latency || 0,
       tier: h.tier || 'offline',
-      recordingStartTime: recordingStartTimes[sk] || null
+      recordingStartTime: recordingStartTimes[sk] || null,
+      updatedAt: s.updatedAt || s._lastGoodAt || h.lastSeen || null
     };
   });
   const publishable = buildPublishableRoomStatus({

@@ -72,10 +72,30 @@
     legacyRoute = null,
     eventProxyUrl = '',
     globalProxyUrl = '',
+    stickyRoute = null,
+    stickyMs = 10_000,
   } = {}) {
     const claims = Object.values(claimMap || {})
       .filter((claim) => freshRoute(claim, now))
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    if (stickyRoute && stickyRoute.url && stickyRoute.selectedAt && (now - stickyRoute.selectedAt) < stickyMs) {
+      const stickyClaim = claims.find((claim) => (
+        claim.url === stickyRoute.url &&
+        (!stickyRoute.commanderId || claim.commanderId === stickyRoute.commanderId)
+      ));
+      if (stickyClaim) return { ...stickyClaim, source: 'claim', roomKey, sticky: true };
+      if (legacyRoute && stickyRoute.source === 'legacy-room' && freshRoute(legacyRoute, now) && legacyRoute.url === stickyRoute.url) {
+        return { ...legacyRoute, source: 'legacy-room', roomKey, sticky: true };
+      }
+      if (stickyRoute.source === 'event' && eventProxyUrl && eventProxyUrl === stickyRoute.url) {
+        return { url: eventProxyUrl, source: 'event', roomKey, sticky: true };
+      }
+      if (stickyRoute.source === 'global' && globalProxyUrl && globalProxyUrl === stickyRoute.url) {
+        return { url: globalProxyUrl, source: 'global', roomKey, sticky: true };
+      }
+    }
+
     if (claims[0]) return { ...claims[0], source: 'claim', roomKey };
     if (freshRoute(legacyRoute, now)) return { ...legacyRoute, source: 'legacy-room', roomKey };
     if (eventProxyUrl) return { url: eventProxyUrl, source: 'event', roomKey };
@@ -137,6 +157,7 @@
       Object.keys(source.rooms).forEach((key) => {
         const candidate = normalizeRoomStatus(source.rooms[key], fresh);
         candidate._at = at;
+        if (at) candidate.updatedAt = at;
         const current = merged.rooms[key];
         if (!current || (candidate.ok && !current.ok) || (candidate.ok === current.ok && candidate._at > (current._at || 0))) {
           merged.rooms[key] = candidate;

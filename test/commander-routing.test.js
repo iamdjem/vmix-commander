@@ -92,6 +92,28 @@ test('selectRoomProxyRoute chooses the freshest per-room claim', () => {
   assert.equal(route.source, 'claim');
 });
 
+test('selectRoomProxyRoute keeps a recently working sticky claim while it is still fresh', () => {
+  const now = 1_000_000;
+  const route = selectRoomProxyRoute({
+    roomKey: 'roomA',
+    now,
+    claimMap: {
+      stable: { url: 'https://stable.example', commanderId: 'stable', updatedAt: now - 4_000 },
+      fresh: { url: 'https://fresh.example', commanderId: 'fresh', updatedAt: now - 500 },
+    },
+    stickyRoute: {
+      url: 'https://stable.example',
+      commanderId: 'stable',
+      selectedAt: now - 2_000,
+    },
+    stickyMs: 10_000,
+  });
+
+  assert.equal(route.url, 'https://stable.example');
+  assert.equal(route.commanderId, 'stable');
+  assert.equal(route.sticky, true);
+});
+
 test('selectRoomProxyRoute ignores stale claims before falling back', () => {
   const now = 1_000_000;
   const route = selectRoomProxyRoute({
@@ -125,4 +147,5 @@ test('mergeCommanderStatus prefers reachable fresh room reports over unreachable
   assert.equal(merged.rooms.roomA.ok, true);
   assert.equal(merged.rooms.roomA.streaming, true);
   assert.equal(merged.rooms.roomA.latency, 12);
+  assert.equal(merged.rooms.roomA.updatedAt, now - 2000);
 });
