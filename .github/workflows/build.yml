@@ -36,6 +36,7 @@ jobs:
           path: |
             dist/*.exe
             !dist/*Setup*.exe.blockmap
+          retention-days: 1
 
   build-mac:
     runs-on: macos-latest
@@ -61,6 +62,7 @@ jobs:
         with:
           name: vmix-commander-mac
           path: dist/*.dmg
+          retention-days: 1
 
   release:
     needs: [build-windows, build-mac]
