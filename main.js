@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const http = require('http');
 const https = require('https');
 const path = require('path');
@@ -455,7 +455,11 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Without this, a minimised or covered window has its timers cut to
+      // once a minute, so vMix status reaches the tracker ~60 s late and
+      // rooms flicker to Unreachable.
+      backgroundThrottling: false
     },
     backgroundColor: '#111111',
     titleBarStyle: 'default',
@@ -467,6 +471,9 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+
+  // Keep the app running at full speed while it sits behind vMix.
+  powerSaveBlocker.start('prevent-app-suspension');
 
   // Open DevTools in development
   // mainWindow.webContents.openDevTools();

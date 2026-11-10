@@ -703,11 +703,12 @@ function switchPage(page) {
   }
 
   // Page-specific actions
+  // Status polling keeps running on every tab: the tracker marks a room
+  // unreachable when this Commander stops publishing, so leaving the Rooms
+  // tab must not stop it. Only (re)start it here if it is not running yet.
   if (page === 'rooms') {
     renderRooms();
-    startStatusRefresh();
-  } else {
-    stopStatusRefresh();
+    if (!statusRefreshInterval) startStatusRefresh();
   }
 
   if (page === 'show') {
@@ -3534,7 +3535,11 @@ function renderEventSelect() {
     }).join('');
 }
 
-// Push active profile's rooms to the linked tracker event
+// Push active profile's rooms to the linked tracker event.
+// Merges instead of replacing: a transaction reads the shared list and only
+// adds rooms it lacks or fills blank IPs (mergeVmixRoomLists). Replacing the
+// whole list let a freshly installed Commander, with new room keys and no
+// IPs, wipe every room's IP for all other Commanders.
 async function pushRoomsToTrackerEvent() {
   const profile = getCurrentProfile();
   if (!profile.trackerEventId || !firebaseDb || !trackerAuth || !trackerAuth.currentUser) return;
@@ -3542,7 +3547,8 @@ async function pushRoomsToTrackerEvent() {
   try {
     const path = `${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/config/vmixRooms`;
     const rooms = profile.rooms.map(r => ({ key: r.key, name: r.name, ip: r.ip || '' }));
-    await firebaseDb.ref(path).set(rooms);
+    const merge = window.CommanderRoutingHelpers.mergeVmixRoomLists;
+    await firebaseDb.ref(path).transaction((current) => merge(current, rooms));
     // Also bump updatedAt so the tracker re-syncs
     await firebaseDb.ref(`${TRACKER_FB_ROOT}/events/${profile.trackerEventId}/updatedAt`).set(Date.now());
   } catch (error) {
